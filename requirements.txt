@@ -1,0 +1,33 @@
+# Insurance Claims RAG System - Dependencies (Pinned Versions)
+
+# Core frameworks - LlamaIndex
+llama-index==0.10.58
+llama-index-core==0.10.58
+llama-index-llms-openai==0.1.29
+llama-index-embeddings-openai==0.1.11
+llama-index-vector-stores-chroma==0.1.10
+llama-index-readers-file==0.1.30
+
+# Vector store
+chromadb==0.4.24
+
+# LLM APIs
+openai==1.40.0
+google-generativeai==0.8.3  # For Gemini evaluation judge
+
+# Document processing
+pypdf==4.3.1
+pdf2image==1.17.0
+
+# Data handling
+pandas==2.2.2
+
+# Configuration
+python-dotenv==1.0.1
+
+# Async support
+aiohttp==3.9.5
+
+# Optional: Streamlit UI (uncomment when needed)
+# streamlit==1.38.0
+

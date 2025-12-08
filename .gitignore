@@ -1,0 +1,40 @@
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.local
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Vector database
+chroma_db/
+
+# Documents
+docs/
+
+# SQLite database
+*.db
+
+# IDE
+.vscode/
+.idea/
+.history/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Note: Keep data/ in repo (contains PDFs), but ignore generated databases
+# Note: .env.example is tracked, .env is ignored
