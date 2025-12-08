@@ -20,6 +20,7 @@ from typing import List, Dict, Optional
 
 from llama_index.core import Document, SimpleDirectoryReader
 from llama_index.llms.openai import OpenAI
+from llama_index.readers.file import PDFReader
 
 from src.config import DATA_DIR, OPENAI_API_KEY, OPENAI_MINI_MODEL
 
@@ -141,10 +142,14 @@ def load_claim_documents(
         raise ValueError(f"No PDF files found in {data_dir}")
     
     # Load documents using SimpleDirectoryReader
+    # Use file_extractor to ensure PDFs are loaded as single documents (not split by page)
+    pdf_reader = PDFReader(return_full_document=True)  # Combine all pages into one document
+    
     reader = SimpleDirectoryReader(
         input_dir=str(data_dir),
         required_exts=[".pdf"],
-        recursive=False
+        recursive=False,
+        file_extractor={".pdf": pdf_reader}  # Use our configured PDF reader
     )
     
     documents = reader.load_data()
