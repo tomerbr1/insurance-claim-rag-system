@@ -215,7 +215,7 @@ Document CLM-2024-001847
 
 ### Prerequisites
 
-- Python 3.9+
+- **Python 3.11.14** (required)
 - **OpenAI API key** (required) - Get from https://platform.openai.com/api-keys
 - **Google API key** (required) - Get from https://makersuite.google.com/app/apikey
 
@@ -228,6 +228,9 @@ Document CLM-2024-001847
 ```bash
 # Clone or navigate to project
 cd insurance-claim-rag-system
+
+# Ensure you have Python 3.11.14 installed
+python --version  # Should show Python 3.11.14
 
 # Create virtual environment
 python -m venv .venv
@@ -243,20 +246,7 @@ cp env.example .env
 #   GOOGLE_API_KEY=your-key-here
 ```
 
-**Why `.venv`?**
-- Modern Python convention (like `.git`, `.env`)
-- Hidden from directory listings by default
-- Automatically ignored by git (see `.gitignore`)
-- Consistent with tools that look for `.venv`
-
 **Important:** The system will validate both API keys at startup and fail fast if either is missing or invalid. This ensures unbiased evaluation throughout.
-
-**What gets ignored by git?**
-- `.venv/` - Virtual environment
-- `.env` - Your API keys (never commit!)
-- `chroma_db/` - Vector database
-- `*.db` - SQLite databases
-- All Python bytecode and temp files
 
 ---
 
@@ -439,17 +429,6 @@ insurance-claim-rag-system/
 | **Embeddings** | text-embedding-3-small | OpenAI | Vector representations |
 | **Evaluation Judge** | Gemini 2.0 Flash | Google | Score system responses (different provider for unbiased evaluation) |
 
-### Why Different Providers for Evaluation?
-
-Using **Gemini** (Google) for evaluation instead of OpenAI provides:
-- **Unbiased assessment**: Avoids "OpenAI evaluating OpenAI" bias
-- **Independent perspective**: Different training data and reasoning patterns
-- **No fallback**: System requires both keys to ensure evaluation is always unbiased
-- **Cost-effective**: Gemini Flash is very affordable for evaluation tasks
-- **Fast**: Flash models are optimized for speed
-
-**Design Decision:** We deliberately have NO fallback to OpenAI for evaluation. If the Google API key is missing, the system will fail fast rather than compromising evaluation integrity.
-
 ---
 
 ## License
@@ -460,5 +439,5 @@ This project is part of an academic assignment.
 
 ## Author
 
-Insurance Claims RAG System - Midterm Project
+Insurance Claims RAG System - Tomer Brami
 
