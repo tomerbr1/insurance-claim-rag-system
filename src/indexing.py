@@ -4,6 +4,7 @@ Indexing Module - Build Summary Index and Hierarchical Vector Index.
 This module implements:
 1. Summary Index with MapReduce (stores intermediate summaries)
 2. Hierarchical Vector Index with ChromaDB
+3. Persistence for all indexes (ChromaDB + JSON)
 
 Summary Index Architecture (from instructor feedback):
 - Chunk-level summaries (10-20 per claim) - stored as nodes
@@ -15,9 +16,14 @@ Hierarchical Vector Index:
 - Stores only leaf nodes (small chunks)
 - ChromaDB for vector storage
 - Used with auto-merging retriever
+
+Persistence:
+- Summary nodes: Stored in ChromaDB collection "insurance_claims_summaries"
+- Docstore: Persisted to JSON file for auto-merging support
 """
 
 import logging
+import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
@@ -37,6 +43,11 @@ from src.config import (
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Persistence constants
+SUMMARY_COLLECTION_NAME = "insurance_claims_summaries"
+DOCSTORE_FILE = "docstore.json"
+SUMMARY_NODES_FILE = "summary_nodes.json"
 
 
 # Prompts for summary generation
@@ -254,7 +265,11 @@ def build_summary_index(
     
     summary_index = VectorStoreIndex(summary_nodes)
     
-    logger.info("✅ Summary index built successfully")
+    # Persist summary nodes for later reuse
+    logger.info("Persisting summary index for future reuse...")
+    persist_summary_index(summary_nodes)
+    
+    logger.info("✅ Summary index built and persisted successfully")
     return summary_index, summary_nodes
 
 
@@ -327,7 +342,11 @@ def build_hierarchical_index(
         storage_context=storage_context
     )
     
-    logger.info(f"✅ Hierarchical index built with {len(leaf_nodes)} leaf nodes")
+    # Persist docstore for later reuse (needed for auto-merging)
+    logger.info("Persisting docstore for future reuse...")
+    persist_docstore(docstore, persist_dir)
+    
+    logger.info(f"✅ Hierarchical index built and persisted with {len(leaf_nodes)} leaf nodes")
     return index
 
 
@@ -353,6 +372,359 @@ def get_index_statistics(
     }
     
     return stats
+
+
+# =============================================================================
+# PERSISTENCE FUNCTIONS
+# =============================================================================
+
+def persist_summary_index(
+    summary_nodes: List[TextNode],
+    persist_dir: Optional[Path] = None
+) -> bool:
+    """
+    Persist summary nodes to ChromaDB for later reloading.
+    
+    This stores the summary nodes (chunk/section/document summaries) in a 
+    separate ChromaDB collection so they can be reused without re-running
+    the expensive MapReduce summarization.
+    
+    Args:
+        summary_nodes: List of summary TextNodes to persist
+        persist_dir: Directory for ChromaDB persistence
+    
+    Returns:
+        True if successful
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Persisting {len(summary_nodes)} summary nodes to ChromaDB...")
+    
+    try:
+        # Setup ChromaDB
+        chroma_client = chromadb.PersistentClient(path=str(persist_dir))
+        
+        # Delete existing summary collection if it exists
+        try:
+            chroma_client.delete_collection(SUMMARY_COLLECTION_NAME)
+            logger.info(f"Deleted existing summary collection")
+        except Exception:
+            pass
+        
+        # Create new collection
+        summary_collection = chroma_client.create_collection(
+            name=SUMMARY_COLLECTION_NAME,
+            metadata={"description": "Insurance claims summary nodes"}
+        )
+        
+        # Create vector store and index
+        vector_store = ChromaVectorStore(chroma_collection=summary_collection)
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        
+        # Setup embedding model
+        embedding_model = OpenAIEmbedding(
+            model=OPENAI_EMBEDDING_MODEL,
+            api_key=OPENAI_API_KEY
+        )
+        Settings.embed_model = embedding_model
+        
+        # Build and persist index
+        VectorStoreIndex(nodes=summary_nodes, storage_context=storage_context)
+        
+        # Also save nodes to JSON for metadata (ChromaDB doesn't preserve all metadata)
+        nodes_json_path = persist_dir / SUMMARY_NODES_FILE
+        nodes_data = []
+        for node in summary_nodes:
+            nodes_data.append({
+                'node_id': node.node_id,
+                'text': node.text,
+                'metadata': node.metadata
+            })
+        
+        with open(nodes_json_path, 'w') as f:
+            json.dump(nodes_data, f, indent=2)
+        
+        logger.info(f"✅ Persisted {len(summary_nodes)} summary nodes")
+        logger.info(f"   ChromaDB collection: {SUMMARY_COLLECTION_NAME}")
+        logger.info(f"   JSON backup: {nodes_json_path}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error persisting summary nodes: {e}")
+        return False
+
+
+def persist_docstore(
+    docstore: SimpleDocumentStore,
+    persist_dir: Optional[Path] = None
+) -> bool:
+    """
+    Persist the document store to JSON for auto-merging support.
+    
+    The docstore contains all hierarchical nodes (small + large) and their
+    parent-child relationships, which is needed for the auto-merging retriever.
+    
+    Args:
+        docstore: SimpleDocumentStore with all nodes
+        persist_dir: Directory for persistence
+    
+    Returns:
+        True if successful
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    
+    docstore_path = persist_dir / DOCSTORE_FILE
+    
+    logger.info(f"Persisting docstore to {docstore_path}...")
+    
+    try:
+        # Get all documents from docstore
+        all_docs = docstore.docs
+        
+        # Serialize to JSON-friendly format
+        docstore_data = {
+            'nodes': {}
+        }
+        
+        for doc_id, doc in all_docs.items():
+            # Serialize node data
+            node_data = {
+                'node_id': doc.node_id,
+                'text': doc.text,
+                'metadata': doc.metadata,
+                'class_name': doc.class_name()
+            }
+            
+            # Handle relationships (parent/child)
+            if hasattr(doc, 'relationships') and doc.relationships:
+                node_data['relationships'] = {
+                    str(k): v.node_id if hasattr(v, 'node_id') else str(v)
+                    for k, v in doc.relationships.items()
+                }
+            
+            docstore_data['nodes'][doc_id] = node_data
+        
+        with open(docstore_path, 'w') as f:
+            json.dump(docstore_data, f, indent=2)
+        
+        logger.info(f"✅ Persisted docstore with {len(docstore_data['nodes'])} nodes")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error persisting docstore: {e}")
+        return False
+
+
+def load_summary_index(
+    persist_dir: Optional[Path] = None
+) -> Tuple[Optional[VectorStoreIndex], Optional[List[TextNode]]]:
+    """
+    Load persisted summary index from ChromaDB.
+    
+    Args:
+        persist_dir: Directory where ChromaDB is persisted
+    
+    Returns:
+        Tuple of (summary_index, summary_nodes) or (None, None) if not found
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    
+    if not persist_dir.exists():
+        logger.warning(f"Persist directory does not exist: {persist_dir}")
+        return None, None
+    
+    try:
+        # Check for ChromaDB collection
+        chroma_client = chromadb.PersistentClient(path=str(persist_dir))
+        collections = [c.name for c in chroma_client.list_collections()]
+        
+        if SUMMARY_COLLECTION_NAME not in collections:
+            logger.warning(f"Summary collection not found: {SUMMARY_COLLECTION_NAME}")
+            return None, None
+        
+        logger.info(f"Loading summary index from ChromaDB...")
+        
+        # Setup embedding model
+        embedding_model = OpenAIEmbedding(
+            model=OPENAI_EMBEDDING_MODEL,
+            api_key=OPENAI_API_KEY
+        )
+        Settings.embed_model = embedding_model
+        
+        # Get collection and create vector store
+        summary_collection = chroma_client.get_collection(SUMMARY_COLLECTION_NAME)
+        vector_store = ChromaVectorStore(chroma_collection=summary_collection)
+        
+        # Create index from existing vector store
+        summary_index = VectorStoreIndex.from_vector_store(vector_store)
+        
+        # Load nodes from JSON backup (for full metadata)
+        summary_nodes = []
+        nodes_json_path = persist_dir / SUMMARY_NODES_FILE
+        
+        if nodes_json_path.exists():
+            with open(nodes_json_path, 'r') as f:
+                nodes_data = json.load(f)
+            
+            for node_data in nodes_data:
+                node = TextNode(
+                    text=node_data['text'],
+                    metadata=node_data['metadata'],
+                    id_=node_data['node_id']
+                )
+                summary_nodes.append(node)
+        
+        logger.info(f"✅ Loaded summary index with {len(summary_nodes)} nodes")
+        return summary_index, summary_nodes
+        
+    except Exception as e:
+        logger.error(f"Error loading summary index: {e}")
+        return None, None
+
+
+def load_docstore(
+    persist_dir: Optional[Path] = None
+) -> Optional[SimpleDocumentStore]:
+    """
+    Load persisted docstore from JSON.
+    
+    Args:
+        persist_dir: Directory where docstore is persisted
+    
+    Returns:
+        SimpleDocumentStore or None if not found
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    docstore_path = persist_dir / DOCSTORE_FILE
+    
+    if not docstore_path.exists():
+        logger.warning(f"Docstore file not found: {docstore_path}")
+        return None
+    
+    try:
+        logger.info(f"Loading docstore from {docstore_path}...")
+        
+        with open(docstore_path, 'r') as f:
+            docstore_data = json.load(f)
+        
+        # Reconstruct nodes
+        docstore = SimpleDocumentStore()
+        nodes = []
+        
+        for node_id, node_data in docstore_data['nodes'].items():
+            node = TextNode(
+                text=node_data['text'],
+                metadata=node_data['metadata'],
+                id_=node_data['node_id']
+            )
+            nodes.append(node)
+        
+        docstore.add_documents(nodes)
+        
+        logger.info(f"✅ Loaded docstore with {len(nodes)} nodes")
+        return docstore
+        
+    except Exception as e:
+        logger.error(f"Error loading docstore: {e}")
+        return None
+
+
+def load_hierarchical_index(
+    docstore: SimpleDocumentStore,
+    persist_dir: Optional[Path] = None,
+    collection_name: Optional[str] = None
+) -> Optional[VectorStoreIndex]:
+    """
+    Load persisted hierarchical index from ChromaDB.
+    
+    Args:
+        docstore: The loaded docstore (needed for auto-merging)
+        persist_dir: Directory where ChromaDB is persisted
+        collection_name: ChromaDB collection name
+    
+    Returns:
+        VectorStoreIndex or None if not found
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    collection_name = collection_name or CHROMA_COLLECTION_NAME
+    
+    if not persist_dir.exists():
+        logger.warning(f"Persist directory does not exist: {persist_dir}")
+        return None
+    
+    try:
+        # Check for ChromaDB collection
+        chroma_client = chromadb.PersistentClient(path=str(persist_dir))
+        collections = [c.name for c in chroma_client.list_collections()]
+        
+        if collection_name not in collections:
+            logger.warning(f"Collection not found: {collection_name}")
+            return None
+        
+        logger.info(f"Loading hierarchical index from ChromaDB...")
+        
+        # Setup embedding model
+        embedding_model = OpenAIEmbedding(
+            model=OPENAI_EMBEDDING_MODEL,
+            api_key=OPENAI_API_KEY
+        )
+        Settings.embed_model = embedding_model
+        
+        # Get collection and create vector store
+        collection = chroma_client.get_collection(collection_name)
+        vector_store = ChromaVectorStore(chroma_collection=collection)
+        
+        # Create storage context with docstore
+        storage_context = StorageContext.from_defaults(
+            vector_store=vector_store,
+            docstore=docstore
+        )
+        
+        # Create index from existing vector store
+        index = VectorStoreIndex.from_vector_store(
+            vector_store,
+            storage_context=storage_context
+        )
+        
+        logger.info(f"✅ Loaded hierarchical index from {collection_name}")
+        return index
+        
+    except Exception as e:
+        logger.error(f"Error loading hierarchical index: {e}")
+        return None
+
+
+def load_all_indexes(
+    persist_dir: Optional[Path] = None
+) -> Tuple[Optional[VectorStoreIndex], Optional[VectorStoreIndex], 
+           Optional[SimpleDocumentStore], Optional[List[TextNode]]]:
+    """
+    Load all persisted indexes at once.
+    
+    Args:
+        persist_dir: Directory where data is persisted
+    
+    Returns:
+        Tuple of (summary_index, hierarchical_index, docstore, summary_nodes)
+        Any component may be None if not found/loadable
+    """
+    persist_dir = persist_dir or CHROMA_DIR
+    
+    # Load docstore first (needed for hierarchical index)
+    docstore = load_docstore(persist_dir)
+    
+    # Load summary index
+    summary_index, summary_nodes = load_summary_index(persist_dir)
+    
+    # Load hierarchical index (needs docstore)
+    hierarchical_index = None
+    if docstore:
+        hierarchical_index = load_hierarchical_index(docstore, persist_dir)
+    
+    return summary_index, hierarchical_index, docstore, summary_nodes
 
 
 # Quick test

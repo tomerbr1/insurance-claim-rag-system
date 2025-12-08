@@ -15,7 +15,14 @@ Usage:
     python main.py              # Interactive mode (prompts to clean if data exists)
     python main.py --eval       # Run evaluation
     python main.py --build      # Build indexes only
-    python main.py --no-cleanup # Skip cleanup prompt (keep existing data)
+    python main.py --no-cleanup # Instant startup - reuse existing data
+
+Startup Behavior:
+- First run: Full build (loads PDFs, extracts metadata, builds indexes) ~5-10 min
+- Subsequent runs: Prompts to clean or reuse existing data
+  - [y] Clean: Fresh build from scratch
+  - [N] Keep: Instant startup (loads persisted indexes)
+- --no-cleanup flag: Automatically reuses existing data for instant startup
 """
 
 import argparse
@@ -39,12 +46,122 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def load_existing_system():
+    """
+    Load the RAG system from existing persisted data.
+    
+    This is called when the user chooses to reuse existing data,
+    enabling instant startup without re-processing documents.
+    
+    Returns:
+        Dictionary with all system components, or None if loading fails
+    """
+    from src.config import validate_config, OPENAI_API_KEY, OPENAI_MODEL
+    from src.metadata_store import MetadataStore
+    from src.indexing import load_all_indexes
+    from src.agents.structured_agent import create_structured_agent
+    from src.agents.summary_agent import create_summary_agent
+    from src.agents.needle_agent import create_needle_agent
+    from src.agents.router_agent import create_router_agent
+    from src.mcp.chromadb_client import ChromaDBMCPClient, create_mcp_tools
+    
+    print("\n" + "=" * 70)
+    print("⚡ LOADING EXISTING DATA - INSTANT STARTUP")
+    print("=" * 70)
+    
+    # Validate configuration
+    print("\n🔧 Validating configuration...")
+    validate_config()
+    print("✅ Configuration valid")
+    
+    # Validate API keys
+    print("\n🔑 Validating API keys...")
+    from src.config import validate_api_keys
+    try:
+        validate_api_keys()
+        print("✅ Both OpenAI and Google API keys are valid")
+    except ValueError as e:
+        print(f"\n{e}")
+        raise
+    
+    # Initialize LLM
+    llm = OpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+    
+    # Load all indexes from persistence
+    print("\n📂 Loading persisted indexes...")
+    summary_index, hierarchical_index, docstore, summary_nodes = load_all_indexes()
+    
+    if not all([summary_index, hierarchical_index, docstore]):
+        print("\n❌ Failed to load all indexes - falling back to full build")
+        return None
+    
+    print(f"   ✅ Summary index loaded")
+    print(f"   ✅ Hierarchical index loaded")
+    print(f"   ✅ Docstore loaded ({len(docstore.docs)} nodes)")
+    
+    # Load metadata store (it already exists on disk)
+    print("\n💾 Loading metadata store...")
+    metadata_store = MetadataStore()
+    stats = metadata_store.get_statistics()
+    print(f"   ✅ Loaded {stats['total_claims']} claims from SQLite")
+    
+    # Create agents with loaded indexes
+    print("\n🤖 Creating agents...")
+    
+    structured_agent = create_structured_agent(metadata_store, llm)
+    print("   ✅ Structured agent (SQL queries)")
+    
+    summary_agent = create_summary_agent(summary_index, llm)
+    print("   ✅ Summary agent (high-level RAG)")
+    
+    needle_agent = create_needle_agent(hierarchical_index, docstore, llm)
+    print("   ✅ Needle agent (precise RAG)")
+    
+    # Create router
+    print("\n🔀 Creating router...")
+    router = create_router_agent(
+        structured_engine=structured_agent,
+        summary_engine=summary_agent,
+        needle_engine=needle_agent,
+        llm=llm,
+        verbose=True
+    )
+    print("✅ Router created (3-way: structured/summary/needle)")
+    
+    # Initialize MCP client
+    print("\n🔌 Initializing MCP client...")
+    mcp_client = ChromaDBMCPClient()
+    mcp_client.connect()
+    mcp_tools = create_mcp_tools(mcp_client)
+    print(f"✅ MCP client connected with {len(mcp_tools)} tools")
+    
+    print("\n" + "=" * 70)
+    print("⚡ INSTANT STARTUP COMPLETE!")
+    print("   (Loaded from existing data - no re-indexing needed)")
+    print("=" * 70)
+    
+    return {
+        'router': router,
+        'structured_agent': structured_agent,
+        'summary_agent': summary_agent,
+        'needle_agent': needle_agent,
+        'metadata_store': metadata_store,
+        'summary_index': summary_index,
+        'hierarchical_index': hierarchical_index,
+        'docstore': docstore,
+        'mcp_client': mcp_client,
+        'mcp_tools': mcp_tools,
+        'documents': None  # Not loaded when reusing
+    }
+
+
 def build_system(skip_cleanup: bool = False):
     """
     Build the complete RAG system.
     
     Steps:
     0. Cleanup existing data (ChromaDB, SQLite) for fresh start
+       - If user chooses to keep data AND data is complete, load instead of build
     1. Load documents with LLM metadata extraction
     2. Populate metadata store (SQL)
     3. Create hierarchical chunks
@@ -69,17 +186,34 @@ def build_system(skip_cleanup: bool = False):
     from src.agents.needle_agent import create_needle_agent
     from src.agents.router_agent import create_router_agent
     from src.mcp.chromadb_client import ChromaDBMCPClient, create_mcp_tools
-    from src.cleanup import cleanup_all
+    from src.cleanup import cleanup_all, check_existing_data
     
     print("\n" + "=" * 70)
     print("🚀 INSURANCE CLAIMS RAG SYSTEM - INITIALIZATION")
     print("=" * 70)
     
     # Step 0: Cleanup for fresh start (interactive by default)
+    cleanup_results = None
     if not skip_cleanup:
         cleanup_results = cleanup_all(verbose=True, interactive=True)
+        
+        # Check if user chose to keep data AND data can be reused
+        if cleanup_results.get('skipped') and cleanup_results.get('can_reuse'):
+            print("\n✨ Existing data is complete - loading instead of rebuilding...")
+            loaded_system = load_existing_system()
+            if loaded_system:
+                return loaded_system
+            print("\n⚠️  Loading failed - proceeding with full build...")
     else:
+        # --no-cleanup flag: check if we can reuse existing data
         print("\n⏭️  Skipping cleanup prompt (--no-cleanup flag set)")
+        data_info = check_existing_data()
+        if data_info['can_reuse']:
+            print("✨ Existing data is complete - loading instead of rebuilding...")
+            loaded_system = load_existing_system()
+            if loaded_system:
+                return loaded_system
+            print("\n⚠️  Loading failed - proceeding with full build...")
     
     # Validate configuration
     print("\n🔧 Step 0/7: Validating configuration...")
@@ -343,7 +477,12 @@ Examples:
   python main.py              # Interactive mode (prompts to clean if data exists)
   python main.py --eval       # Run evaluation only
   python main.py --build      # Build indexes and exit
-  python main.py --no-cleanup # Skip cleanup prompt, keep existing data
+  python main.py --no-cleanup # Instant startup if data exists (skip re-indexing)
+
+Startup Modes:
+  - First run: Processes PDFs, extracts metadata, builds indexes (~5-10 min)
+  - With existing data: Choose [N] at prompt for instant startup
+  - --no-cleanup: Automatically reuse existing data (instant startup)
         """
     )
     
@@ -361,7 +500,7 @@ Examples:
     )
     parser.add_argument(
         '--no-cleanup', action='store_true',
-        help='Skip cleanup step (keep existing ChromaDB and SQLite data)'
+        help='Skip cleanup prompt; if data exists, enables instant startup by reusing indexes'
     )
     
     args = parser.parse_args()

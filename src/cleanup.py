@@ -5,17 +5,196 @@ This module ensures a clean slate before each system initialization
 by removing persisted data from:
 1. ChromaDB vector store (chroma_db/)
 2. SQLite metadata store (claims_metadata.db)
+
+Also provides functions to:
+- Check if existing data is valid and complete
+- Determine if indexes can be reused vs need rebuilding
 """
 
 import logging
 import shutil
+import json
+import sqlite3
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional, Tuple
 
-from src.config import CHROMA_DIR, METADATA_DB
+import chromadb
+
+from src.config import CHROMA_DIR, METADATA_DB, CHROMA_COLLECTION_NAME
 
 # Setup logging
 logger = logging.getLogger(__name__)
+
+# Constants for persistence
+SUMMARY_COLLECTION_NAME = "insurance_claims_summaries"
+DOCSTORE_FILE = "docstore.json"
+SUMMARY_NODES_FILE = "summary_nodes.json"
+
+
+def check_existing_data() -> Dict[str, any]:
+    """
+    Check what existing data is available and if it's valid for reuse.
+    
+    Returns:
+        Dictionary with:
+        - has_chromadb: bool - ChromaDB exists with data
+        - has_metadata_db: bool - SQLite exists with claims
+        - has_summary_data: bool - Summary nodes and docstore exist
+        - chromadb_count: int - Number of documents in ChromaDB
+        - metadata_count: int - Number of claims in SQLite
+        - summary_count: int - Number of summary nodes
+        - is_complete: bool - All data present and consistent
+        - can_reuse: bool - Data is valid for reuse (skipping build)
+    """
+    result = {
+        'has_chromadb': False,
+        'has_metadata_db': False,
+        'has_summary_data': False,
+        'chromadb_count': 0,
+        'metadata_count': 0,
+        'summary_count': 0,
+        'is_complete': False,
+        'can_reuse': False,
+        'details': {}
+    }
+    
+    # Check ChromaDB
+    if CHROMA_DIR.exists():
+        try:
+            chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+            collections = chroma_client.list_collections()
+            collection_names = [c.name for c in collections]
+            
+            if CHROMA_COLLECTION_NAME in collection_names:
+                collection = chroma_client.get_collection(CHROMA_COLLECTION_NAME)
+                count = collection.count()
+                result['has_chromadb'] = count > 0
+                result['chromadb_count'] = count
+                result['details']['chromadb_collection'] = CHROMA_COLLECTION_NAME
+            
+            # Check for summary collection
+            if SUMMARY_COLLECTION_NAME in collection_names:
+                summary_collection = chroma_client.get_collection(SUMMARY_COLLECTION_NAME)
+                summary_count = summary_collection.count()
+                result['summary_count'] = summary_count
+                result['has_summary_data'] = summary_count > 0
+                result['details']['summary_collection'] = SUMMARY_COLLECTION_NAME
+                
+        except Exception as e:
+            logger.warning(f"Error checking ChromaDB: {e}")
+            result['details']['chromadb_error'] = str(e)
+    
+    # Check for docstore file
+    docstore_path = CHROMA_DIR / DOCSTORE_FILE
+    if docstore_path.exists():
+        try:
+            with open(docstore_path, 'r') as f:
+                docstore_data = json.load(f)
+                result['details']['docstore_nodes'] = len(docstore_data.get('nodes', {}))
+        except Exception as e:
+            logger.warning(f"Error checking docstore: {e}")
+            result['details']['docstore_error'] = str(e)
+    
+    # Check SQLite metadata
+    if METADATA_DB.exists():
+        try:
+            conn = sqlite3.connect(str(METADATA_DB))
+            cursor = conn.execute("SELECT COUNT(*) FROM claims")
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            result['has_metadata_db'] = count > 0
+            result['metadata_count'] = count
+            result['details']['metadata_db'] = str(METADATA_DB)
+            
+        except Exception as e:
+            logger.warning(f"Error checking metadata DB: {e}")
+            result['details']['metadata_error'] = str(e)
+    
+    # Determine if data is complete and can be reused
+    # Complete means ALL of these must exist:
+    # 1. ChromaDB hierarchical index (for needle agent vector search)
+    # 2. SQLite metadata (for structured agent SQL queries)
+    # 3. Summary index in ChromaDB (for summary agent)
+    # 4. Docstore JSON (for auto-merging retriever in needle agent)
+    
+    has_docstore = result['details'].get('docstore_nodes', 0) > 0
+    
+    if (result['has_chromadb'] and 
+        result['has_metadata_db'] and 
+        result['has_summary_data'] and
+        has_docstore):
+        
+        # All components exist - can reuse
+        if result['metadata_count'] > 0:
+            result['is_complete'] = True
+            result['can_reuse'] = True
+    
+    # Store docstore status for detailed reporting
+    result['has_docstore'] = has_docstore
+    
+    return result
+
+
+def print_existing_data_summary(data_info: Dict) -> None:
+    """
+    Print a human-readable summary of existing data.
+    
+    Args:
+        data_info: Dictionary from check_existing_data()
+    """
+    print("\n📊 EXISTING DATA STATUS")
+    print("=" * 50)
+    
+    # ChromaDB status
+    if data_info['has_chromadb']:
+        print(f"   ✅ ChromaDB: {data_info['chromadb_count']} vectors indexed")
+    else:
+        print(f"   ❌ ChromaDB: No data found")
+    
+    # Summary index status
+    if data_info['has_summary_data']:
+        print(f"   ✅ Summary Index: {data_info['summary_count']} summary nodes")
+    else:
+        print(f"   ❌ Summary Index: No data found (needs rebuild)")
+    
+    # SQLite status
+    if data_info['has_metadata_db']:
+        print(f"   ✅ SQLite Metadata: {data_info['metadata_count']} claims")
+    else:
+        print(f"   ❌ SQLite Metadata: No data found")
+    
+    # Docstore status
+    has_docstore = data_info.get('has_docstore', False)
+    docstore_nodes = data_info.get('details', {}).get('docstore_nodes', 0)
+    if has_docstore:
+        print(f"   ✅ Docstore: {docstore_nodes} hierarchical nodes")
+    else:
+        print(f"   ❌ Docstore: No data found (needs rebuild)")
+    
+    # Overall status
+    print("-" * 50)
+    if data_info['can_reuse']:
+        print("   ✨ STATUS: Data is COMPLETE - can skip indexing!")
+    elif data_info['has_chromadb'] or data_info['has_metadata_db']:
+        missing = []
+        if not data_info['has_chromadb']:
+            missing.append("ChromaDB vectors")
+        if not data_info['has_metadata_db']:
+            missing.append("SQLite metadata")
+        if not data_info['has_summary_data']:
+            missing.append("summary index")
+        if not has_docstore:
+            missing.append("docstore")
+        if missing:
+            print(f"   ⚠️  STATUS: INCOMPLETE - missing: {', '.join(missing)}")
+            print(f"   💡 TIP: Do one full rebuild to enable instant startup")
+        else:
+            print("   ⚠️  STATUS: Data is INCOMPLETE")
+    else:
+        print("   📭 STATUS: No existing data - full build required")
+    
+    print("=" * 50)
 
 
 def cleanup_chromadb(chroma_dir: Path = None) -> bool:
@@ -82,14 +261,26 @@ def cleanup_all(verbose: bool = True, force: bool = False, interactive: bool = T
         interactive: If True, prompt user when data exists (default: True)
     
     Returns:
-        Dictionary with cleanup results for each component
+        Dictionary with cleanup results for each component:
+        - chromadb: bool - was chromadb cleaned
+        - metadata_db: bool - was metadata cleaned
+        - errors: list - any errors encountered
+        - skipped: bool - user chose to keep data
+        - can_reuse: bool - existing data can be fully reused (skip all build steps)
+        - data_info: dict - details about existing data
     """
     results = {
         'chromadb': False,
         'metadata_db': False,
         'errors': [],
-        'skipped': False
+        'skipped': False,
+        'can_reuse': False,
+        'data_info': None
     }
+    
+    # Check existing data thoroughly
+    data_info = check_existing_data()
+    results['data_info'] = data_info
     
     # Check if there's anything to clean
     has_chromadb = CHROMA_DIR.exists()
@@ -103,32 +294,43 @@ def cleanup_all(verbose: bool = True, force: bool = False, interactive: bool = T
     # If data exists and interactive mode is on, ask user
     if interactive and not force:
         print("\n⚠️  EXISTING DATA FOUND")
-        print("=" * 50)
+        print("=" * 60)
         
+        # Show detailed data info
+        print_existing_data_summary(data_info)
+        
+        # Show disk usage
+        print("\n💾 DISK USAGE:")
         if has_chromadb:
             try:
                 total_size = sum(f.stat().st_size for f in CHROMA_DIR.rglob('*') if f.is_file())
                 size_mb = round(total_size / (1024 * 1024), 2)
-                print(f"   • ChromaDB vector store: {size_mb} MB")
+                print(f"   • ChromaDB: {size_mb} MB")
             except Exception:
-                print(f"   • ChromaDB vector store: exists")
+                print(f"   • ChromaDB: exists")
         
         if has_metadata:
             try:
                 size_mb = round(METADATA_DB.stat().st_size / (1024 * 1024), 2)
-                print(f"   • SQLite metadata: {size_mb} MB")
+                print(f"   • SQLite: {size_mb} MB")
             except Exception:
-                print(f"   • SQLite metadata: exists")
+                print(f"   • SQLite: exists")
         
-        print("=" * 50)
-        print("\n🤔 Clean existing data and rebuild from scratch?")
+        print("\n" + "=" * 60)
+        print("\n🤔 What would you like to do?")
         print()
         print("   [y] Yes - Clean and rebuild everything")
-        print("           (Slower, ensures fresh data)")
+        print("           (Slower - re-processes all PDFs, ~5-10 min)")
         print()
-        print("   [N] No  - Keep existing data")
-        print("           (System will still rebuild indexes - takes a few minutes)")
-        print("           (Keeps ChromaDB vectors, avoids re-embedding)")
+        
+        if data_info['can_reuse']:
+            print("   [N] No  - REUSE existing data (RECOMMENDED)")
+            print("           ⚡ INSTANT startup - skip all indexing!")
+            print("           (Uses existing ChromaDB + SQLite + summaries)")
+        else:
+            print("   [N] No  - Keep partial data")
+            print("           (May still need some rebuilding)")
+        
         print()
         print("   💡 TIP: Use --no-cleanup flag to skip this prompt")
         
@@ -137,11 +339,16 @@ def cleanup_all(verbose: bool = True, force: bool = False, interactive: bool = T
         except (EOFError, KeyboardInterrupt):
             print("\n\n⏭️  Keeping existing data")
             results['skipped'] = True
+            results['can_reuse'] = data_info['can_reuse']
             return results
         
         if response not in ['y', 'yes']:
-            print("\n⏭️  Keeping existing ChromaDB data - will reuse embeddings")
+            if data_info['can_reuse']:
+                print("\n⚡ REUSING existing data - instant startup!")
+            else:
+                print("\n⏭️  Keeping existing data")
             results['skipped'] = True
+            results['can_reuse'] = data_info['can_reuse']
             return results
         
         print("\n🧹 Cleaning existing data...")
