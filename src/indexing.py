@@ -97,7 +97,16 @@ def build_summary_index(
     """
     llm = llm or OpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0)
     
-    logger.info("Building summary index with MapReduce...")
+    logger.info("=" * 80)
+    logger.info("BUILDING SUMMARY INDEX - MapReduce Architecture")
+    logger.info("=" * 80)
+    logger.info("This process makes multiple LLM calls to create multi-level summaries:")
+    logger.info("  1. CHUNK LEVEL: Each small chunk → summary (most API calls here)")
+    logger.info("  2. SECTION LEVEL: Group of chunk summaries → section summary")
+    logger.info("  3. DOCUMENT LEVEL: Section summaries → final document summary")
+    logger.info("")
+    logger.info("Why? Enables multi-granularity retrieval for different query types.")
+    logger.info("=" * 80)
     
     # Get leaf nodes only (small chunks)
     leaf_nodes = [n for n in nodes if n.metadata.get('chunk_level') == 'small']
@@ -114,14 +123,29 @@ def build_summary_index(
         claims[claim_id].append(node)
     
     logger.info(f"Found {len(claims)} unique claims")
+    logger.info("")
     
     # Process each claim
+    claim_num = 0
+    total_claims = len(claims)
+    total_chunks_processed = 0
+    
     for claim_id, claim_nodes in claims.items():
-        logger.info(f"Processing claim: {claim_id} ({len(claim_nodes)} chunks)")
+        claim_num += 1
+        logger.info("-" * 80)
+        logger.info(f"📋 CLAIM {claim_num}/{total_claims}: {claim_id}")
+        logger.info(f"   {len(claim_nodes)} chunks to summarize")
+        logger.info("-" * 80)
         
         # Phase 1: MAP - Summarize each chunk
+        logger.info(f"PHASE 1 (MAP): Creating chunk-level summaries...")
+        logger.info(f"Next {len(claim_nodes)} HTTP POST requests = chunk summarization calls")
+        logger.info("")
+        
         chunk_summaries = []
         for i, node in enumerate(claim_nodes):
+            total_chunks_processed += 1
+            
             prompt = CHUNK_SUMMARY_PROMPT.format(text=node.text[:1500])
             
             try:
@@ -151,6 +175,11 @@ def build_summary_index(
         # Phase 2: REDUCE - Create section summary
         # For simplicity, treating all chunks of a claim as one "section"
         # In production, you'd detect actual document sections
+        logger.info("")
+        logger.info(f"PHASE 2 (REDUCE): Creating section-level summary for {claim_id}")
+        logger.info(f"Next 1 HTTP POST request = section summary (combines {len(chunk_summaries)} chunk summaries)")
+        logger.info("")
+        
         combined_chunk_summaries = "\n\n".join([
             f"- {s}" for s in chunk_summaries
         ])
@@ -176,6 +205,11 @@ def build_summary_index(
             section_summary = combined_chunk_summaries[:500]
         
         # Phase 3: Final document summary
+        logger.info("")
+        logger.info(f"PHASE 3 (FINAL): Creating document-level summary for {claim_id}")
+        logger.info(f"Next 1 HTTP POST request = document summary (final aggregation)")
+        logger.info("")
+        
         doc_prompt = DOCUMENT_SUMMARY_PROMPT.format(summaries=section_summary)
         
         try:
@@ -193,8 +227,13 @@ def build_summary_index(
             
         except Exception as e:
             logger.error(f"Error creating document summary: {e}")
+        
+        logger.info(f"✅ Completed summaries for {claim_id}")
+        logger.info("")
     
-    logger.info(f"Created {len(summary_nodes)} summary nodes")
+    logger.info("=" * 80)
+    logger.info(f"SUMMARY INDEX BUILD COMPLETE")
+    logger.info(f"Created {len(summary_nodes)} summary nodes total")
     
     # Count by level
     levels = {}

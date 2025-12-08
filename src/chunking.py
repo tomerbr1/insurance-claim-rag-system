@@ -2,22 +2,22 @@
 Chunking Module - Hierarchical document chunking for auto-merging retrieval.
 
 This module implements:
-1. Three-level hierarchical chunking (small/medium/large)
+1. Two-level hierarchical chunking (small/large)
 2. Parent-child relationships for auto-merging
 3. Metadata preservation across chunk levels
 
 Chunk Size Strategy:
-| Level  | Size (tokens) | Overlap | Purpose                    |
-|--------|---------------|---------|----------------------------|
-| Large  | 1536          | 200     | Full sections, broad context|
-| Medium | 512           | 50      | Paragraph groups, balanced  |
-| Small  | 128           | 20      | Single facts, high precision|
+| Level  | Size (tokens) | Overlap | Purpose                      |
+|--------|---------------|---------|------------------------------|
+| Large  | 1024          | 20      | Full sections, broad context |
+| Small  | 256           | 20      | Individual facts, precision  |
 
 Why hierarchical chunking?
 - Small chunks: Capture precise facts (amounts, dates, IDs)
-- Medium chunks: Provide context for timeline events
 - Large chunks: Full sections for comprehensive understanding
 - Auto-merging: Start with small, merge up when more context needed
+
+Note: Two levels are sufficient for this insurance claims project.
 """
 
 import logging
@@ -45,7 +45,7 @@ def create_hierarchical_nodes(
     
     Args:
         documents: List of LlamaIndex Document objects
-        chunk_sizes: List of chunk sizes [large, medium, small] (default: [1536, 512, 128])
+        chunk_sizes: List of chunk sizes [large, small] (default: [1024, 256])
         chunk_overlap: Overlap between chunks (default: 20)
     
     Returns:
@@ -56,7 +56,7 @@ def create_hierarchical_nodes(
     
     Why this approach?
     - Leaf nodes (small) are indexed for precise retrieval
-    - Parent nodes (medium, large) stored in docstore
+    - Parent nodes (large) stored in docstore
     - Auto-merging retriever can "merge up" when needed
     """
     chunk_sizes = chunk_sizes or CHUNK_SIZES
@@ -96,13 +96,10 @@ def _annotate_node_levels(nodes: List[BaseNode], chunk_sizes: List[int]):
     """
     Add 'level' metadata to nodes based on their approximate size.
     
-    Levels:
-    - 'large': ~1536 tokens
-    - 'medium': ~512 tokens
-    - 'small': ~128 tokens (leaf nodes)
+    Levels (two-level hierarchy):
+    - 'large': ~1024 tokens (parent chunks)
+    - 'small': ~256 tokens (leaf nodes)
     """
-    level_names = ['large', 'medium', 'small']
-    
     for node in nodes:
         # Estimate level based on text length (rough approximation)
         text_len = len(node.text)
@@ -110,11 +107,10 @@ def _annotate_node_levels(nodes: List[BaseNode], chunk_sizes: List[int]):
         # Approximate tokens to characters ratio is ~4 chars per token
         approx_tokens = text_len / 4
         
-        # Assign level based on size
-        if approx_tokens > chunk_sizes[1]:  # > 512
+        # Assign level based on size (two levels)
+        # If larger than the smallest chunk size, it's a large chunk
+        if len(chunk_sizes) >= 2 and approx_tokens > chunk_sizes[1]:
             level = 'large'
-        elif approx_tokens > chunk_sizes[2]:  # > 128
-            level = 'medium'
         else:
             level = 'small'
         
@@ -124,7 +120,7 @@ def _annotate_node_levels(nodes: List[BaseNode], chunk_sizes: List[int]):
 
 def _log_node_statistics(nodes: List[BaseNode], chunk_sizes: List[int]):
     """Log statistics about created nodes."""
-    levels = {'large': 0, 'medium': 0, 'small': 0, 'unknown': 0}
+    levels = {'large': 0, 'small': 0, 'unknown': 0}
     
     for node in nodes:
         level = node.metadata.get('chunk_level', 'unknown')
@@ -191,14 +187,14 @@ def preview_chunks(documents: List[Document], num_chunks: int = 5) -> str:
     ]
     
     # Group by level
-    by_level = {'large': [], 'medium': [], 'small': []}
+    by_level = {'large': [], 'small': []}
     for node in all_nodes:
         level = node.metadata.get('chunk_level', 'small')
         if level in by_level:
             by_level[level].append(node)
     
     # Show samples from each level
-    for level in ['large', 'medium', 'small']:
+    for level in ['large', 'small']:
         nodes = by_level[level]
         lines.append(f"\n--- {level.upper()} CHUNKS ({len(nodes)} total) ---")
         

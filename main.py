@@ -12,15 +12,21 @@ Architecture (Instructor-Approved):
 5. MCP integration for ChromaDB access
 
 Usage:
-    python main.py              # Interactive mode
+    python main.py              # Interactive mode (prompts to clean if data exists)
     python main.py --eval       # Run evaluation
     python main.py --build      # Build indexes only
+    python main.py --no-cleanup # Skip cleanup prompt (keep existing data)
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
+
+from src.utils.nltk_silencer import silence_nltk_downloads
+
+# Silence NLTK download chatter before LlamaIndex initializes tokenizers.
+silence_nltk_downloads()
 
 from llama_index.llms.openai import OpenAI
 from llama_index.core import Settings
@@ -33,11 +39,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def build_system():
+def build_system(skip_cleanup: bool = False):
     """
     Build the complete RAG system.
     
     Steps:
+    0. Cleanup existing data (ChromaDB, SQLite) for fresh start
     1. Load documents with LLM metadata extraction
     2. Populate metadata store (SQL)
     3. Create hierarchical chunks
@@ -45,6 +52,9 @@ def build_system():
     5. Build hierarchical vector index
     6. Create all agents
     7. Create router
+    
+    Args:
+        skip_cleanup: If True, skip the cleanup step (keep existing data)
     
     Returns:
         Dictionary with all system components
@@ -59,10 +69,17 @@ def build_system():
     from src.agents.needle_agent import create_needle_agent
     from src.agents.router_agent import create_router_agent
     from src.mcp.chromadb_client import ChromaDBMCPClient, create_mcp_tools
+    from src.cleanup import cleanup_all
     
     print("\n" + "=" * 70)
     print("🚀 INSURANCE CLAIMS RAG SYSTEM - INITIALIZATION")
     print("=" * 70)
+    
+    # Step 0: Cleanup for fresh start (interactive by default)
+    if not skip_cleanup:
+        cleanup_results = cleanup_all(verbose=True, interactive=True)
+    else:
+        print("\n⏭️  Skipping cleanup prompt (--no-cleanup flag set)")
     
     # Validate configuration
     print("\n🔧 Step 0/7: Validating configuration...")
@@ -107,9 +124,14 @@ def build_system():
     
     # Step 4: Build summary index
     print("\n📚 Step 4/7: Building summary index (MapReduce)...")
-    print("   This may take a minute...")
+    print("   ℹ️  This creates 3 levels of summaries for each claim:")
+    print("      • Chunk-level summaries (precise facts)")
+    print("      • Section-level summaries (grouped context)")
+    print("      • Document-level summaries (full overview)")
+    print(f"   ⏳ Processing ~{len([n for n in all_nodes if n.metadata.get('chunk_level') == 'small'])} chunks across all claims...")
+    print("      (This may take a few minutes)\n")
     summary_index, summary_nodes = build_summary_index(all_nodes, llm)
-    print(f"✅ Built summary index with {len(summary_nodes)} summary nodes")
+    print(f"\n✅ Built summary index with {len(summary_nodes)} summary nodes")
     
     # Step 5: Build hierarchical vector index
     print("\n🔍 Step 5/7: Building hierarchical vector index...")
@@ -281,9 +303,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py              # Interactive mode
+  python main.py              # Interactive mode (prompts to clean if data exists)
   python main.py --eval       # Run evaluation only
   python main.py --build      # Build indexes and exit
+  python main.py --no-cleanup # Skip cleanup prompt, keep existing data
         """
     )
     
@@ -299,6 +322,10 @@ Examples:
         '--verbose', '-v', action='store_true',
         help='Verbose output'
     )
+    parser.add_argument(
+        '--no-cleanup', action='store_true',
+        help='Skip cleanup step (keep existing ChromaDB and SQLite data)'
+    )
     
     args = parser.parse_args()
     
@@ -307,7 +334,7 @@ Examples:
     
     try:
         # Build system
-        system = build_system()
+        system = build_system(skip_cleanup=args.no_cleanup)
         
         if args.build:
             print("\n✅ Build complete. Exiting.")
