@@ -47,20 +47,21 @@ Required fields (use null if not found):
     "settlement_date": "string or null (YYYY-MM-DD format if settled)"
 }}
 
-Document text (first 3000 characters):
+Document text:
 {document_text}
 
 JSON Response:
 """
 
 
-def extract_metadata_with_llm(document_text: str, llm: OpenAI) -> Dict:
+def extract_metadata_with_llm(document_text: str, llm: OpenAI, max_chars: int = 15000) -> Dict:
     """
     Use LLM to extract structured metadata from document text.
     
     Args:
         document_text: The full text of the document
         llm: LlamaIndex OpenAI LLM instance
+        max_chars: Maximum characters to send to LLM (default: 15000, ~4 pages)
     
     Returns:
         Dictionary with extracted metadata
@@ -70,9 +71,20 @@ def extract_metadata_with_llm(document_text: str, llm: OpenAI) -> Dict:
     - Semantic understanding: Knows incident_date != filing_date
     - Robustness: No brittle patterns to maintain
     - Consistency: Aligns with RAG philosophy
+    
+    Note: We use the full document text (up to max_chars) to ensure we capture
+    metadata fields that appear at the end of documents (e.g., claim_status).
     """
-    # Use first 3000 chars - metadata is usually in the header
-    text_sample = document_text[:3000]
+    # Use full document text for small documents (typical insurance claims are 1-4 pages)
+    # Only truncate for unusually large documents to stay within token limits
+    if len(document_text) > max_chars:
+        logger.warning(
+            f"Document text is {len(document_text)} characters, truncating to {max_chars} characters. "
+            f"Metadata extraction may be incomplete."
+        )
+        text_sample = document_text[:max_chars]
+    else:
+        text_sample = document_text
     
     prompt = METADATA_EXTRACTION_PROMPT.format(document_text=text_sample)
     
