@@ -1,0 +1,420 @@
+# Insurance Claims RAG System - Cursor Rules
+
+## Project Overview
+
+This is a **multi-agent RAG (Retrieval-Augmented Generation) system** for insurance claim document analysis. It implements a **hybrid architecture** combining SQL for structured queries with semantic search for unstructured narratives.
+
+### Core Purpose
+- Process insurance claim PDF documents
+- Provide intelligent query routing to specialized agents
+- Support both structured queries ("Claims over $100k") and narrative queries ("What happened in claim X?")
+
+---
+
+## Tech Stack
+
+### Core Framework
+- **LlamaIndex** (primary framework - NOT LangChain)
+- **Python 3.11.14** (required version)
+
+### LLM Providers
+- **OpenAI GPT-4** - Main agents, routing, response generation
+- **OpenAI GPT-4o-mini** - Cost-effective metadata extraction
+- **OpenAI text-embedding-3-small** - Vector embeddings
+- **Google Gemini 2.5 Flash** - Evaluation judge (different provider for unbiased evaluation)
+
+### Data Storage
+- **ChromaDB** - Vector store (local persistent)
+- **SQLite** - Structured metadata storage (`claims_metadata.db`)
+
+### Integration
+- **MCP (Model Context Protocol)** - ChromaDB server integration
+
+### Key Dependencies
+```
+llama-index>=0.10.0
+llama-index-llms-openai
+llama-index-embeddings-openai
+llama-index-vector-stores-chroma
+chromadb>=0.4.0
+openai>=1.0.0
+pypdf>=3.0.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
+google-generativeai  # For Gemini evaluation
+```
+
+---
+
+## Project Structure
+
+```
+insurance-claim-rag-system/
+├── main.py                    # Entry point & orchestrator
+├── requirements.txt           # Python dependencies
+├── env.example               # Environment template (.env for actual keys)
+├── claims_metadata.db        # SQLite metadata store
+│
+├── insurance_claims_data/    # PDF claim documents (10 files)
+│   └── CLM_2024_*.pdf
+│
+├── src/
+│   ├── __init__.py
+│   ├── config.py             # Configuration & settings
+│   ├── data_loader.py        # PDF loading + LLM metadata extraction
+│   ├── metadata_store.py     # SQLite for structured queries
+│   ├── chunking.py           # Hierarchical node parser
+│   ├── indexing.py           # Summary & vector index builders
+│   ├── retrieval.py          # Auto-merging retriever
+│   ├── evaluation.py         # LLM-as-judge evaluation (Gemini)
+│   ├── cleanup.py            # Index cleanup utilities
+│   │
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── router_agent.py   # 3-way query router
+│   │   ├── structured_agent.py # SQL-based queries
+│   │   ├── summary_agent.py  # High-level RAG
+│   │   └── needle_agent.py   # Precise fact retrieval
+│   │
+│   └── mcp/
+│       ├── __init__.py
+│       └── chromadb_client.py # MCP ChromaDB integration
+│
+└── tests/
+    └── test_queries.py       # Test query definitions
+```
+
+---
+
+## Architecture Patterns
+
+### 1. Hybrid Architecture (SQL + RAG)
+
+**CRITICAL**: This system uses a hybrid approach - NOT pure RAG.
+
+| Query Type | Route To | Example |
+|------------|----------|---------|
+| Exact lookups | **Structured (SQL)** | "Get claim CLM-2024-001847" |
+| Filters/aggregations | **Structured (SQL)** | "Claims over $50k" |
+| High-level overviews | **Summary (RAG)** | "What happened?" |
+| Precise facts | **Needle (RAG)** | "Exact towing cost?" |
+
+### 2. Three-Way Query Routing
+
+The Router Agent classifies queries into three categories:
+- **STRUCTURED**: Metadata queries → SQLite
+- **SUMMARY**: Narrative questions → Summary Index
+- **NEEDLE**: Precise fact extraction → Hierarchical Index + Auto-merge
+
+### 3. Hierarchical Chunking
+
+Three chunk sizes with specific purposes:
+
+| Level | Tokens | Overlap | Purpose |
+|-------|--------|---------|---------|
+| Small | 128 | 20 | Precise facts (amounts, dates, IDs) |
+| Medium | 512 | 50 | Balanced context |
+| Large | 1536 | 200 | Full sections |
+
+Auto-merge threshold: **50%** - merge to parent when >50% of children retrieved.
+
+### 4. Multi-Level Summary Index (MapReduce)
+
+Store intermediate summaries at ALL levels (not just final):
+- **Chunk-level summaries** (10-20 per claim)
+- **Section-level summaries** (3-5 per claim)
+- **Document-level summaries** (1 per claim)
+
+This enables multi-granularity retrieval.
+
+---
+
+## Coding Conventions
+
+### LlamaIndex Patterns
+
+```python
+# Use LlamaIndex imports, NOT LangChain
+from llama_index.core import VectorStoreIndex, SummaryIndex
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.core.node_parser import HierarchicalNodeParser
+from llama_index.core.retrievers import AutoMergingRetriever
+```
+
+### LLM Initialization
+
+```python
+# Main LLM for agents
+llm = OpenAI(model="gpt-4", temperature=0)
+
+# Cost-effective LLM for metadata extraction
+extraction_llm = OpenAI(model="gpt-4o-mini", temperature=0)
+
+# Embeddings
+embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+```
+
+### Metadata Extraction (LLM, NOT Regex)
+
+**IMPORTANT**: Always use LLM for metadata extraction, never regex patterns.
+
+```python
+# Correct approach
+metadata = extract_metadata_with_llm(document_text, llm)
+
+# Wrong approach - DO NOT USE
+# metadata = re.search(r"Claim ID: (\w+)", text)
+```
+
+### Agent Prompt Templates
+
+All agent prompts should follow this structure:
+```python
+AGENT_PROMPT = """
+You are a [role description].
+Your role is to [specific task].
+
+When answering:
+- [Guideline 1]
+- [Guideline 2]
+- [Guideline 3]
+
+Context from claims:
+{context}
+
+Question: {query}
+"""
+```
+
+### Error Handling
+
+```python
+try:
+    response = query_engine.query(query)
+except Exception as e:
+    logger.error(f"Query failed: {str(e)}")
+    return f"Error processing query: {str(e)}"
+```
+
+---
+
+## Key Design Decisions (Instructor-Approved)
+
+### 1. Why Hybrid Architecture?
+- SQL queries are **100x faster** for exact matches
+- No hallucination on structured data (deterministic)
+- RAG for semantic understanding where SQL cannot help
+
+### 2. Why LLM for Metadata Extraction?
+- Handles format variations (Oct 15, 2024 vs 2024-10-15)
+- Semantic understanding (distinguishes incident_date from filing_date)
+- No brittle regex maintenance
+- Trade-off: ~$0.01 per document, ~2s slower
+
+### 3. Why Store Intermediate Summaries?
+- Different queries need different granularity
+- "What were repair costs?" → Section summary
+- "Overview of claim" → Document summary
+
+### 4. Why MCP Integration?
+- Industry-standard protocol
+- Community-maintained servers
+- Richer functionality than custom tools
+
+---
+
+## Evaluation System
+
+### Metrics
+- **Correctness**: Does answer match ground truth? (0.0-1.0)
+- **Relevancy**: Was retrieved context relevant? (0.0-1.0)
+- **Recall**: Were correct documents retrieved? (0.0-1.0)
+- **Routing Accuracy**: Did router choose correct agent? (Boolean)
+
+### Judge Model
+**CRITICAL**: Use Gemini (Google) to evaluate OpenAI outputs for unbiased evaluation.
+
+```python
+# Evaluation uses different provider
+from google.generativeai import GenerativeModel
+judge_model = GenerativeModel("gemini-2.5-flash")
+```
+
+### Test Case Structure
+
+```python
+{
+    "query": "What was the exact towing cost?",
+    "expected_agent": "needle",  # structured | summary | needle
+    "ground_truth": "$185.00",
+    "expected_chunks": ["CLM-2024-001847"],
+    "query_type": "precise_fact"
+}
+```
+
+---
+
+## Common Tasks
+
+### Running the System
+
+```bash
+# Interactive mode
+python main.py
+
+# Evaluation mode
+python main.py --eval
+
+# Build indexes only
+python main.py --build
+```
+
+### Adding New Test Cases
+
+Edit `tests/test_queries.py`:
+```python
+TEST_CASES.append({
+    "query": "Your new query",
+    "expected_agent": "needle",
+    "ground_truth": "Expected answer",
+    "expected_chunks": ["CLM-2024-XXXXXX"]
+})
+```
+
+### Rebuilding Indexes
+
+If you need to rebuild indexes after changes:
+```python
+from src.cleanup import cleanup_all_indexes
+cleanup_all_indexes()
+# Then run main.py --build
+```
+
+---
+
+## Environment Variables
+
+Required in `.env`:
+```
+OPENAI_API_KEY=sk-...        # Required for agents
+GOOGLE_API_KEY=...           # Required for evaluation
+```
+
+Both keys are validated at startup - system fails fast if missing.
+
+---
+
+## Important Constraints
+
+### DO
+- Use LlamaIndex (not LangChain)
+- Use LLM for metadata extraction (not regex)
+- Store intermediate summaries (not just final)
+- Use 3-way routing (structured/summary/needle)
+- Use Gemini for evaluation (different provider)
+- Follow hierarchical chunking (128/512/1536)
+
+### DO NOT
+- Use regex for metadata extraction
+- Build custom MCP tools (use existing ChromaDB server)
+- Skip intermediate summary storage
+- Use same LLM provider for evaluation
+- Hard-code API keys in source files
+
+---
+
+## Document Metadata Schema
+
+Claims metadata stored in SQLite:
+
+```sql
+CREATE TABLE claims (
+    claim_id TEXT PRIMARY KEY,      -- e.g., "CLM-2024-001847"
+    claim_type TEXT,                -- e.g., "Auto Accident", "Slip and Fall"
+    claimant TEXT,                  -- Full name
+    policy_number TEXT,
+    claim_status TEXT,              -- OPEN/CLOSED/SETTLED
+    total_value REAL,               -- Dollar amount
+    incident_date DATE,             -- YYYY-MM-DD
+    filing_date DATE,
+    settlement_date DATE            -- Nullable
+);
+```
+
+---
+
+## Agent Routing Logic
+
+Router uses this decision tree:
+
+1. **Is it about exact structured data?** (dates, IDs, amounts as filters)
+   → **STRUCTURED** (SQL)
+
+2. **Does it need narrative understanding or broad context?**
+   → **SUMMARY** (RAG on summary index)
+
+3. **Does it need precise fact extraction from document text?**
+   → **NEEDLE** (RAG with auto-merging)
+
+---
+
+## Performance Expectations
+
+| Query Type | Expected Latency |
+|------------|------------------|
+| Structured (SQL) | ~5-10ms |
+| Summary (RAG) | ~500ms |
+| Needle (RAG) | ~600ms |
+
+---
+
+## Debugging Tips
+
+### Check Routing Decision
+```python
+if hasattr(response, 'metadata') and 'selector_result' in response.metadata:
+    print(f"Routed to: {response.metadata['selector_result']}")
+```
+
+### Inspect Retrieved Chunks
+```python
+for node in response.source_nodes:
+    print(f"Claim: {node.metadata.get('claim_id')}")
+    print(f"Score: {node.score}")
+    print(f"Text: {node.text[:200]}...")
+```
+
+### Verify Index Contents
+Use MCP tools to inspect ChromaDB:
+```python
+collections = await mcp_client.list_collections()
+stats = await mcp_client.get_collection_stats("claims")
+```
+
+---
+
+## File Naming Conventions
+
+- Claim PDFs: `CLM_2024_XXXXXX.pdf`
+- Python modules: `snake_case.py`
+- Agent files: `*_agent.py`
+- Test files: `test_*.py`
+
+---
+
+## Git Workflow
+
+The project tracks these key files:
+- `main.py` - Main orchestrator
+- `src/` - All source modules
+- `tests/` - Test definitions
+- `requirements.txt` - Dependencies
+- `README.md` - Documentation
+
+Ignored (in `.gitignore`):
+- `.env` - API keys
+- `chroma_db/` - Vector store data
+- `__pycache__/` - Python cache
+- `.venv/` - Virtual environment
+
