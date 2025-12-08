@@ -25,7 +25,7 @@ This system processes 10 insurance claim documents and provides intelligent quer
 
 ✅ **Hybrid Architecture** - SQL + RAG for optimal performance  
 ✅ **3-Way Query Routing** - Intelligent classification to specialized agents  
-✅ **Hierarchical Chunking** - Multi-level chunks (128/512/1536 tokens)  
+✅ **Hierarchical Chunking** - 2-level chunks (1024/256 tokens)  
 ✅ **Auto-Merging Retrieval** - Automatic context expansion  
 ✅ **Multi-Level Summaries** - Chunk → Section → Document summaries  
 ✅ **LLM-as-Judge Evaluation** - Automated quality assessment  
@@ -40,13 +40,18 @@ This system processes 10 insurance claim documents and provides intelligent quer
 ```
 ┌─────────────────┐
 │   User Query    │
+│ "What was the   │
+│  towing cost?"  │
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐
-│  Router Agent   │ ◄── Classifies query type
-│  (3-way routing)│
-└────────┬────────┘
+┌─────────────────────────────────┐
+│      Router Agent (GPT-4)       │
+│  Classifies query into:         │
+│  • STRUCTURED (SQL metadata)    │
+│  • SUMMARY (high-level overview)│
+│  • NEEDLE (precise fact)        │
+└────────┬────────────────────────┘
          │
     ┌────┴────┬────────────┐
     │         │            │
@@ -54,19 +59,26 @@ This system processes 10 insurance claim documents and provides intelligent quer
 ┌───────┐ ┌───────┐ ┌──────────┐
 │STRUCT │ │SUMMARY│ │  NEEDLE  │
 │ Agent │ │ Agent │ │  Agent   │
+│(GPT-4)│ │(GPT-4)│ │ (GPT-4)  │
 └───┬───┘ └───┬───┘ └────┬─────┘
     │         │          │
-    ▼         ▼          ▼
+    │         │          │ Auto-merging
+    ▼         ▼          ▼ retrieval
 ┌───────┐ ┌───────┐ ┌──────────┐
 │SQLite │ │Summary│ │Hierarchi-│
 │  DB   │ │ Index │ │cal Index │
+│       │ │       │ │(ChromaDB)│
+│10 rows│ │~200   │ │~150 leaf │
+│       │ │nodes  │ │nodes     │
 └───────┘ └───────┘ └──────────┘
+    │         │          │
     │         │          │
     └─────────┴──────────┘
               │
               ▼
       ┌──────────────┐
       │   Response   │
+      │ + Citations  │
       └──────────────┘
 ```
 
@@ -84,13 +96,14 @@ This system processes 10 insurance claim documents and provides intelligent quer
 ### Data Flow
 
 ```
-PDF Documents
+PDF Documents (10 claims)
      │
      ▼
 ┌────────────────────────────────────────────┐
 │           DATA LOADING                      │
 │  • Load PDFs with SimpleDirectoryReader    │
-│  • Extract metadata using LLM (not regex)  │
+│  • Extract metadata using LLM (GPT-4o-mini)│
+│    (not regex - handles format variations) │
 └────────────────┬───────────────────────────┘
                  │
         ┌────────┴────────┐
@@ -98,13 +111,19 @@ PDF Documents
         ▼                 ▼
 ┌───────────────┐  ┌────────────────────────┐
 │ METADATA STORE│  │ HIERARCHICAL CHUNKING  │
-│   (SQLite)    │  │  Small: 128 tokens     │
-│               │  │  Medium: 512 tokens    │
-│ • claim_id    │  │  Large: 1536 tokens    │
-│ • claim_type  │  └───────────┬────────────┘
-│ • total_value │              │
-│ • dates       │     ┌────────┴────────┐
-└───────────────┘     │                 │
+│   (SQLite)    │  │  2 levels with overlap │
+│               │  │                        │
+│ • claim_id    │  │  Large:  1024 tokens   │
+│ • claim_type  │  │    └─ Small: 256       │
+│ • total_value │  │                        │
+│ • dates, etc. │  │  Overlap: 20 tokens    │
+│               │  │                        │
+│ Used by:      │  │  Creates parent-child  │
+│ Structured    │  │  relationships in      │
+│ Agent         │  │  DocumentStore         │
+└───────────────┘              │
+                      ┌────────┴────────┐
+                      │                 │
                       ▼                 ▼
                ┌────────────┐    ┌────────────┐
                │  SUMMARY   │    │  VECTOR    │
@@ -114,8 +133,71 @@ PDF Documents
                │ • Chunk    │    │ Leaf nodes │
                │ • Section  │    │ only       │
                │ • Document │    │            │
-               └────────────┘    └────────────┘
+               │            │    │ Auto-      │
+               │ ~200 nodes │    │ merging    │
+               │            │    │ retrieval  │
+               │ Used by:   │    │            │
+               │ Summary    │    │ Used by:   │
+               │ Agent      │    │ Needle     │
+               └────────────┘    │ Agent      │
+                                 └────────────┘
+                                 
+                      ┌────────────────┐
+                      │ Router Agent   │
+                      │ (Coordinates   │
+                      │  all 3 agents) │
+                      └────────────────┘
 ```
+
+**Processing Pipeline:**
+
+| Phase | Component | Output | Notes |
+|-------|-----------|--------|-------|
+| 1. Load | `SimpleDirectoryReader` | 10 Documents | Raw PDF text |
+| 2. Extract | LLM (GPT-4o-mini) | Metadata dicts | ~$0.01 cost |
+| 3. Store | SQLite + Chunking | DB + Nodes | Dual path |
+| 4. Summarize | MapReduce (GPT-4) | Summary nodes | 3 levels |
+| 5. Embed | ChromaDB + OpenAI | Vector index | Leaf nodes only |
+| 6. Build | Agent creation | 4 agents | Router + 3 specialists |
+| 7. Query | Runtime routing | Responses | Per-query execution |
+
+**Total build time:** ~2-3 minutes | **Total cost:** ~$0.10-0.15
+
+---
+
+### Data Processing Pipeline Details
+
+The system processes data through a carefully orchestrated pipeline:
+
+**Pipeline Execution Time:** ~2-3 minutes for 10 documents
+
+**Phase-by-Phase Breakdown:**
+
+| Phase | Time | LLM Calls | Storage | Notes |
+|-------|------|-----------|---------|-------|
+| **1. Load PDFs** | ~5s | 0 | Memory | 10 PDFs → Document objects |
+| **2. Extract Metadata** | ~20s | 10 | SQLite | GPT-4o-mini, 1 call/doc |
+| **3. Chunk Documents** | ~10s | 0 | Memory + DocStore | 2 levels, ~200-300 nodes |
+| **4. Build Summary Index** | ~90-120s | ~150-200 | VectorStore | Most expensive phase |
+| **5. Build Vector Index** | ~30-45s | ~150 | ChromaDB | Embedding generation |
+| **6. Create Agents** | ~1s | 0 | Memory | Configure 4 agents |
+| **7. Ready for Queries** | Instant | 1-2/query | - | Runtime queries |
+
+**Storage Footprint:**
+- **SQLite database**: ~50 KB (10 rows of structured metadata)
+- **ChromaDB vector store**: ~5-10 MB (embeddings + metadata)
+- **In-memory objects**: ~15-20 MB (document store, nodes, agents)
+
+**Cost Breakdown (per full rebuild):**
+- Metadata extraction (GPT-4o-mini): ~$0.01-0.02
+- Summary generation (GPT-4): ~$0.08-0.12
+- Embedding generation (text-embedding-3-small): ~$0.01
+- **Total per rebuild**: ~$0.10-0.15
+
+**Runtime Query Costs:**
+- Structured query: ~$0.001 (minimal LLM use)
+- Summary query: ~$0.005-0.01 (routing + generation)
+- Needle query: ~$0.01-0.02 (routing + retrieval + generation)
 
 ---
 
@@ -163,41 +245,114 @@ PDF Documents
 - "Overview of claim" → Document summary (high-level)
 - Enables flexible retrieval at appropriate detail level
 
-**Structure**:
+**MapReduce Implementation**:
+
+The system uses a true MapReduce pattern with LLM calls:
+
+**MAP Phase** (Per-chunk summarization):
+- Input: ~10-20 small chunks per claim
+- Process: Each chunk → GPT-4 → 2-3 sentence summary
+- Output: Chunk-level summary nodes (stored as retrievable TextNodes)
+- LLM calls: ~100-200 total (10-20 per claim × 10 claims)
+
+**REDUCE Phase 1** (Section-level aggregation):
+- Input: All chunk summaries for a claim
+- Process: Combine summaries → GPT-4 → 3-5 sentence section summary
+- Output: Section-level summary nodes
+- LLM calls: ~10 (1 per claim)
+
+**REDUCE Phase 2** (Document-level aggregation):
+- Input: Section summaries for a claim
+- Process: Create comprehensive summary → GPT-4 → 1 paragraph
+- Output: Document-level summary node
+- LLM calls: ~10 (1 per claim)
+
+**Storage Structure**:
 ```
 Document CLM-2024-001847
-├── Document Summary (1 node)
-│   "Auto accident claim, Robert Mitchell, $14,050.33 settled..."
+├── Document Summary (1 node) ← stored in VectorStoreIndex
+│   metadata: {'summary_level': 'document', 'claim_id': 'CLM-2024-001847'}
+│   text: "Auto accident claim by Robert Mitchell, total $14,050.33, 
+│          settled Nov 30, 2024. Intersection collision, vehicle towed..."
 │
-├── Section Summaries (3-5 nodes)
-│   ├── "Incident: Oct 15, 2024, intersection collision..."
-│   ├── "Costs: Towing $185, repairs $8,500..."
-│   └── "Timeline: Filed Oct 16, settled Nov 30..."
+├── Section Summary (1 node) ← stored in VectorStoreIndex
+│   metadata: {'summary_level': 'section', 'claim_id': 'CLM-2024-001847'}
+│   text: "Incident occurred Oct 15, 2024 at Main St intersection.
+│          Towing: $185 (Invoice #T-8827). Repairs: $8,500..."
 │
-└── Chunk Summaries (10-20 nodes)
-    ├── "Police report by Officer Thompson, Badge #4421..."
-    ├── "Tow Invoice #T-8827, $185.00..."
+└── Chunk Summaries (15 nodes) ← stored in VectorStoreIndex
+    ├── metadata: {'summary_level': 'chunk', 'chunk_index': 0, ...}
+    │   text: "Police report by Officer Thompson, Badge #4421..."
+    ├── metadata: {'summary_level': 'chunk', 'chunk_index': 1, ...}
+    │   text: "Tow Invoice #T-8827, dated Oct 15, amount $185.00..."
     └── ...
 ```
 
+**All summary levels are vectorized and retrievable**, enabling the Summary Agent to find the most appropriate granularity based on the query.
+
 ### 4. Hierarchical Chunking with Auto-Merging
 
-**Decision**: Use three chunk sizes (128/512/1536 tokens) with auto-merging retrieval.
+**Decision**: Use two chunk sizes (1024/256 tokens) with auto-merging retrieval.
 
 **Rationale**:
-- **Small chunks (128)**: Capture precise facts (amounts, dates, IDs)
-- **Medium chunks (512)**: Provide context for timeline events
-- **Large chunks (1536)**: Full sections for comprehensive understanding
+- **Small chunks (256)**: Capture precise facts (amounts, dates, IDs)
+- **Large chunks (1024)**: Full sections for comprehensive understanding
 - **Auto-merge**: Automatically expands context when needed
+- Two levels are sufficient for insurance claims documents
 
-**Parameters**:
-| Level | Tokens | Overlap | Purpose |
-|-------|--------|---------|---------|
-| Small | 128 | 20 | Precise facts |
-| Medium | 512 | 50 | Balanced context |
-| Large | 1536 | 200 | Full sections |
+**Chunking Parameters**:
+| Level | Tokens | Overlap | Purpose | Indexed? |
+|-------|--------|---------|---------|----------|
+| Small | 256 | 20 | Precise facts | ✅ Yes (in ChromaDB) |
+| Large | 1024 | 20 | Full sections | ❌ No (in DocStore only) |
 
-**Auto-Merge Threshold**: 50% - If more than half of a parent's children are retrieved, merge to parent.
+**How Auto-Merging Works:**
+
+1. **Initial Retrieval**: 
+   - Query → ChromaDB vector search → Top-k small chunks (k=5)
+   - Example: Query "towing cost" retrieves 5 small chunks about towing
+
+2. **Merge Decision**:
+   - For each retrieved small chunk, check its siblings (other children of same parent)
+   - If >50% of siblings are also retrieved → merge to parent (medium chunk)
+   - Example: 3 out of 5 small chunks share same medium parent → merge to medium
+
+3. **Recursive Merging**:
+   - Apply same logic to medium chunks
+   - Can merge medium → large if threshold met
+   - Example: If multiple medium chunks from same section retrieved → expand to large
+
+4. **Context Expansion**:
+   - User gets expanded context automatically
+   - No need to manually adjust chunk size
+   - Balances precision with context
+
+**Auto-Merge Threshold**: 50% (configurable in `AutoMergingRetriever`)
+
+**Example Retrieval Flow**:
+```
+Query: "What was the exact towing cost in CLM-2024-001847?"
+
+Step 1 - Initial retrieval:
+  → Retrieved 5 small chunks (256 tokens each)
+  → chunk_0: "Tow Invoice #T-8827..."
+  → chunk_1: "Amount: $185.00..."
+  → chunk_2: "Date: Oct 15, 2024..."
+  → chunk_8: "Other claim detail..."
+  → chunk_15: "Another detail..."
+
+Step 2 - Check merge conditions:
+  → chunk_0, chunk_1, chunk_2 share parent: large_0
+  → 3 out of 4 children retrieved (75% > 50% threshold)
+  → MERGE to large_0
+
+Step 3 - Return expanded context:
+  → Original: 768 tokens (3 × 256)
+  → After merge: 1024 tokens (1 large chunk)
+  → Includes full section context about towing incident
+```
+
+This ensures precise retrieval with automatic context expansion when needed.
 
 ### 5. MCP Integration
 
@@ -408,7 +563,7 @@ insurance-claim-rag-system/
 | LLM for metadata | Robust extraction | Higher cost, slower |
 | Store all summaries | Flexible retrieval | More storage |
 | 3-way routing | Better accuracy | More complexity |
-| Small chunks (128) | Precise retrieval | May lose context |
+| Small chunks (256) | Precise retrieval | May lose context |
 
 ### Future Improvements
 

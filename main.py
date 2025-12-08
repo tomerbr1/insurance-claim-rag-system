@@ -196,55 +196,92 @@ def run_interactive(system: dict):
     """
     router = system['router']
     
-    print("\n" + "=" * 70)
-    print("🎯 INTERACTIVE MODE")
-    print("=" * 70)
-    print("\nHybrid Architecture Active:")
-    print("   • STRUCTURED: Exact lookups, filters, aggregations (SQL)")
-    print("   • SUMMARY: High-level overviews, timelines (RAG)")
-    print("   • NEEDLE: Precise fact retrieval (RAG + auto-merge)")
-    print("\nCommands:")
-    print("   'eval'  - Run evaluation suite")
-    print("   'stats' - Show system statistics")
-    print("   'quit'  - Exit the system")
-    print("=" * 70)
+    def show_menu():
+        """Display the main menu."""
+        print("\n" + "=" * 70)
+        print("🎯 INTERACTIVE MODE - MAIN MENU")
+        print("=" * 70)
+        print("\nHybrid Architecture Active:")
+        print("   • STRUCTURED: Exact lookups, filters, aggregations (SQL)")
+        print("   • SUMMARY: High-level overviews, timelines (RAG)")
+        print("   • NEEDLE: Precise fact retrieval (RAG + auto-merge)")
+        print("\nAvailable Commands:")
+        print("   'query' - Send a query to the system")
+        print("   'eval'  - Run evaluation suite")
+        print("   'stats' - Show system statistics")
+        print("   'quit'  - Exit the system")
+        print("=" * 70)
+    
+    # Show menu initially
+    show_menu()
     
     while True:
         print("\n" + "-" * 70)
         try:
-            query = input("💬 Enter your query: ").strip()
+            command = input("💬 Enter command: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             break
         
-        if not query:
+        if not command:
             continue
         
-        if query.lower() == 'quit':
+        if command == 'quit':
             break
         
-        if query.lower() == 'eval':
+        if command == 'eval':
             run_evaluation_mode(system)
+            show_menu()
             continue
         
-        if query.lower() == 'stats':
+        if command == 'stats':
             show_statistics(system)
+            show_menu()
             continue
         
-        # Process query
-        try:
-            print(f"\n🔍 Processing query...")
-            response, metadata = router.query_with_metadata(query)
+        if command == 'query':
+            # Enter query mode - stay in loop until user types 'back'
+            print("\n" + "=" * 70)
+            print("🔍 QUERY MODE")
+            print("=" * 70)
+            print("💡 Enter your queries below. Type 'back' to return to the main menu.")
+            print("-" * 70)
             
-            print(f"\n💡 Answer:")
-            print("-" * 40)
-            print(response)
-            print("-" * 40)
+            while True:
+                try:
+                    user_query = input("\n💭 Query: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                
+                if not user_query:
+                    continue
+                
+                # Check if user wants to go back to menu
+                if user_query.lower() == 'back':
+                    break
+                
+                # Process query
+                try:
+                    print(f"\n🔍 Processing query...")
+                    response, metadata = router.query_with_metadata(user_query)
+                    
+                    print(f"\n💡 Answer:")
+                    print("-" * 40)
+                    print(response)
+                    print("-" * 40)
+                    
+                    print(f"\n🎯 Routed to: {metadata.get('routed_to', 'unknown').upper()}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing query: {e}")
+                    print(f"\n❌ Error: {str(e)}")
             
-            print(f"\n🎯 Routed to: {metadata.get('routed_to', 'unknown').upper()}")
-            
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            print(f"\n❌ Error: {str(e)}")
+            # Return to main menu
+            show_menu()
+            continue
+        
+        # Unknown command
+        print(f"❌ Unknown command: '{command}'")
+        print("💡 Available commands: query, eval, stats, quit")
     
     print("\n👋 Goodbye!")
 
