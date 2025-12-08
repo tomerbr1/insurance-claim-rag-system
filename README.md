@@ -299,7 +299,7 @@ Builds indexes without entering interactive mode.
 
 ### Methodology
 
-We use **LLM-as-Judge** evaluation with a completely different provider (Gemini 2.0 Flash) evaluating responses from the main system (OpenAI GPT-4). This avoids potential bias from having OpenAI evaluate its own outputs.
+We use **LLM-as-Judge** evaluation with a completely different provider (Gemini 2.5 Flash) evaluating responses from the main system (OpenAI GPT-4). This avoids potential bias from having OpenAI evaluate its own outputs.
 
 ### Metrics
 
@@ -427,7 +427,7 @@ insurance-claim-rag-system/
 | **Agents & Routing** | GPT-4 | OpenAI | Query processing, response generation |
 | **Metadata Extraction** | GPT-4o-mini | OpenAI | Extract structured data from PDFs (cost-effective) |
 | **Embeddings** | text-embedding-3-small | OpenAI | Vector representations |
-| **Evaluation Judge** | Gemini 2.0 Flash | Google | Score system responses (different provider for unbiased evaluation) |
+| **Evaluation Judge** | Gemini 2.5 Flash | Google | Score system responses (different provider for unbiased evaluation) |
 
 ---
 

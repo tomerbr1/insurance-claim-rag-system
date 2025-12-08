@@ -31,7 +31,7 @@ OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-s
 
 # Google/Gemini Configuration (for evaluation)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-2.0-flash")
+GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-2.5-flash")
 
 # Chunking Configuration
 CHUNK_SIZES = [1536, 512, 128]  # Large, Medium, Small
