@@ -44,6 +44,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+# Silence noisy Chroma telemetry chatter (INFO/ERROR) to keep startup clean.
+for chroma_logger_name in [
+    "chromadb.telemetry",
+    "chromadb.telemetry.product.posthog",
+]:
+    chroma_logger = logging.getLogger(chroma_logger_name)
+    chroma_logger.setLevel(logging.CRITICAL)
+    chroma_logger.propagate = False
 
 
 def load_existing_system():
