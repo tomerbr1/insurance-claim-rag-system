@@ -363,7 +363,7 @@ def run_interactive(system: dict):
             break
         
         if command == 'eval':
-            run_evaluation_mode(system)
+            run_evaluation_mode(system, delay=2.0)  # Default delay for interactive mode
             show_menu()
             continue
         
@@ -420,17 +420,28 @@ def run_interactive(system: dict):
     print("\n👋 Goodbye!")
 
 
-def run_evaluation_mode(system: dict):
-    """Run the evaluation suite."""
+def run_evaluation_mode(system: dict, subset: int = None, delay: float = 2.0):
+    """
+    Run the evaluation suite.
+    
+    Args:
+        system: System components dictionary
+        subset: Number of test cases to run (None = all)
+        delay: Delay between queries in seconds
+    """
     from src.evaluation import run_evaluation, print_evaluation_summary, TEST_CASES, LLMJudge
     
+    test_cases = TEST_CASES[:subset] if subset else TEST_CASES
+    
     print("\n📊 Running evaluation suite...")
-    print(f"   Test cases: {len(TEST_CASES)}")
+    print(f"   Test cases: {len(test_cases)}" + (f" (subset of {len(TEST_CASES)})" if subset else ""))
+    print(f"   Delay between queries: {delay}s")
+    print("   💡 Tip: Use --eval-delay 5 if you hit rate limits")
     
     router = system['router']
     judge = LLMJudge()
     
-    results = run_evaluation(router, TEST_CASES, judge, verbose=True)
+    results = run_evaluation(router, test_cases, judge, verbose=True, delay_between_queries=delay)
     print_evaluation_summary(results)
 
 
@@ -474,21 +485,32 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py              # Interactive mode (prompts to clean if data exists)
-  python main.py --eval       # Run evaluation only
-  python main.py --build      # Build indexes and exit
-  python main.py --no-cleanup # Instant startup if data exists (skip re-indexing)
+  python main.py                     # Interactive mode
+  python main.py --eval              # Run full evaluation
+  python main.py --eval --eval-subset 3   # Run only 3 test cases
+  python main.py --eval --eval-delay 5    # 5 second delay between queries
+  python main.py --build             # Build indexes and exit
+  python main.py --no-cleanup        # Instant startup if data exists
 
-Startup Modes:
-  - First run: Processes PDFs, extracts metadata, builds indexes (~5-10 min)
-  - With existing data: Choose [N] at prompt for instant startup
-  - --no-cleanup: Automatically reuse existing data (instant startup)
+Rate Limit Mitigation:
+  If you hit OpenAI rate limits (429 errors), try:
+  1. --eval-delay 5        # Increase delay between queries
+  2. --eval-subset 3       # Run fewer test cases
+  3. Check your OpenAI billing/usage at platform.openai.com
         """
     )
     
     parser.add_argument(
         '--eval', action='store_true',
         help='Run evaluation suite and exit'
+    )
+    parser.add_argument(
+        '--eval-subset', type=int, default=None, metavar='N',
+        help='Run only first N test cases (useful for rate limit issues)'
+    )
+    parser.add_argument(
+        '--eval-delay', type=float, default=2.0, metavar='SECONDS',
+        help='Delay between queries in seconds (default: 2.0, increase if hitting rate limits)'
     )
     parser.add_argument(
         '--build', action='store_true',
@@ -517,7 +539,7 @@ Startup Modes:
             return 0
         
         if args.eval:
-            run_evaluation_mode(system)
+            run_evaluation_mode(system, subset=args.eval_subset, delay=args.eval_delay)
             return 0
         
         # Interactive mode

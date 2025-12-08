@@ -27,7 +27,7 @@ from llama_index.core.tools import QueryEngineTool
 from llama_index.llms.openai import OpenAI
 from llama_index.core.bridge.pydantic import PrivateAttr
 
-from src.config import OPENAI_API_KEY, OPENAI_MODEL
+from src.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MINI_MODEL
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -109,6 +109,7 @@ class RouterAgent(CustomQueryEngine):
         needle_engine,
         llm: Optional[OpenAI] = None,
         verbose: bool = True,
+        use_mini_for_routing: bool = True,
         **kwargs
     ):
         """
@@ -118,14 +119,24 @@ class RouterAgent(CustomQueryEngine):
             structured_engine: Query engine for SQL-based queries
             summary_engine: Query engine for high-level RAG queries
             needle_engine: Query engine for precise RAG queries
-            llm: LLM for routing decisions (default: GPT-4)
+            llm: LLM for routing decisions (default: GPT-4o-mini for cost efficiency)
             verbose: Whether to log routing decisions
+            use_mini_for_routing: Use cheaper model for routing (default True)
         """
         super().__init__(**kwargs)
         self._structured_engine = structured_engine
         self._summary_engine = summary_engine
         self._needle_engine = needle_engine
-        self._llm = llm or OpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+        
+        # Use cheaper model for routing by default - classification doesn't need GPT-4
+        if llm:
+            self._llm = llm
+        else:
+            routing_model = OPENAI_MINI_MODEL if use_mini_for_routing else OPENAI_MODEL
+            self._llm = OpenAI(model=routing_model, api_key=OPENAI_API_KEY, temperature=0)
+            if verbose:
+                logger.info(f"Router using model: {routing_model}")
+        
         self._verbose = verbose
     
     def _classify_query(self, query: str) -> QueryType:

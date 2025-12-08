@@ -351,7 +351,8 @@ def run_evaluation(
     router,
     test_cases: List[TestCase] = None,
     judge: LLMJudge = None,
-    verbose: bool = True
+    verbose: bool = True,
+    delay_between_queries: float = 2.0
 ) -> List[EvaluationResult]:
     """
     Run full evaluation suite.
@@ -361,10 +362,13 @@ def run_evaluation(
         test_cases: Test cases to run (default: TEST_CASES)
         judge: LLM judge instance
         verbose: Whether to print progress
+        delay_between_queries: Seconds to wait between queries to avoid rate limits
     
     Returns:
         List of EvaluationResult objects
     """
+    import time
+    
     test_cases = test_cases or TEST_CASES
     judge = judge or LLMJudge()
     
@@ -430,6 +434,19 @@ def run_evaluation(
             logger.error(f"Error evaluating test case: {e}")
             import traceback
             traceback.print_exc()
+            
+            # Check if it's a rate limit error
+            if "rate" in str(e).lower() or "429" in str(e) or "quota" in str(e).lower():
+                logger.warning("Rate limit detected. Waiting 30 seconds before continuing...")
+                if verbose:
+                    print("⚠️  Rate limit hit - waiting 30 seconds...")
+                time.sleep(30)
+        
+        # Add delay between queries to avoid rate limits
+        if i < len(test_cases) and delay_between_queries > 0:
+            if verbose:
+                print(f"   ⏳ Waiting {delay_between_queries}s before next query...")
+            time.sleep(delay_between_queries)
     
     return results
 
