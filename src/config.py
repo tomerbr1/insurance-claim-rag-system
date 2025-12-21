@@ -50,6 +50,12 @@ MCP_MODE = os.getenv("MCP_MODE", "direct")
 MCP_ENABLED = os.getenv("MCP_ENABLED", "true").lower() == "true"
 MCP_LOG_TOOL_CALLS = os.getenv("MCP_LOG_TOOL_CALLS", "true").lower() == "true"
 
+# Table Extraction Configuration
+# Enable/disable table extraction from PDFs (uses pdfplumber)
+EXTRACT_TABLES = os.getenv("EXTRACT_TABLES", "true").lower() == "true"
+TABLE_MIN_ROWS = int(os.getenv("TABLE_MIN_ROWS", "2"))  # Minimum rows for valid table
+TABLE_MIN_COLS = int(os.getenv("TABLE_MIN_COLS", "2"))  # Minimum columns for valid table
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

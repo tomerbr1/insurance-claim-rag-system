@@ -1,6 +1,6 @@
 # Insurance Claims Dataset
 
-Synthetic dataset of 10 insurance claim documents for testing RAG systems with multi-agent architectures.
+Synthetic dataset of 13 insurance claim documents for testing RAG systems with multi-agent architectures.
 
 ## Documents Overview
 
@@ -16,6 +16,22 @@ Synthetic dataset of 10 insurance claim documents for testing RAG systems with m
 | CLM-2024-004583 | Life Insurance - Death Benefit | Estate of William Harrison | $500,547.95 |
 | CLM-2024-004891 | Professional Liability (E&O) | Vertex Technologies Inc. | $1,550,000 (reserve) |
 | CLM-2024-005234 | Travel Insurance - Trip Cancellation | Dr. Amanda & Kevin Foster | $16,650.00 |
+
+## Table-Based Claims (NEW)
+
+These documents contain embedded tables to test pdfplumber table extraction:
+
+| Claim ID | Type | Table Type | Key Needle Data |
+|----------|------|------------|-----------------|
+| CLM-2024-006001 | Property Damage - Storm | Financial Breakdown | Roof: $12,500.00 on 2024-09-15 |
+| CLM-2024-006002 | Auto - Multi-Vehicle | Coverage/Policy | Medical Payments limit: $5,000 |
+| CLM-2024-006003 | Workers Comp - Workplace | Treatment Timeline | MRI: $2,800.00 on 2024-10-03 |
+
+### Table Extraction Test Queries
+- "What was the exact cost of roof replacement in the property damage claim?" (needle)
+- "What is the Medical Payments coverage limit in the auto claim?" (needle)
+- "How much did the MRI cost in the workers comp claim?" (needle)
+- "Summarize all costs in the property claim CLM-2024-006001" (summary)
 
 ## Needle Data (Hard-to-Find Facts)
 

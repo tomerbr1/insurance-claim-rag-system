@@ -16,8 +16,9 @@ Why LLM for metadata extraction?
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
+import pdfplumber
 from llama_index.core import Document, SimpleDirectoryReader
 from llama_index.llms.openai import OpenAI
 from llama_index.readers.file import PDFReader
@@ -28,6 +29,152 @@ from src.config import DATA_DIR, OPENAI_API_KEY, OPENAI_MINI_MODEL
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Table Extraction Functions
+# =============================================================================
+
+def extract_tables_from_pdf(pdf_path: Path, min_rows: int = 2, min_cols: int = 2) -> List[Dict]:
+    """
+    Extract tables from a PDF using pdfplumber.
+
+    Args:
+        pdf_path: Path to the PDF file
+        min_rows: Minimum rows for a valid table (default: 2)
+        min_cols: Minimum columns for a valid table (default: 2)
+
+    Returns:
+        List of dicts with 'page', 'table_index', 'table_data' for each table
+    """
+    tables = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_tables = page.extract_tables()
+                for i, table in enumerate(page_tables):
+                    # Validate table has minimum dimensions
+                    if table and len(table) >= min_rows:
+                        if table[0] and len(table[0]) >= min_cols:
+                            tables.append({
+                                'page': page_num + 1,
+                                'table_index': i,
+                                'table_data': table
+                            })
+    except Exception as e:
+        logger.warning(f"Error extracting tables from {pdf_path}: {e}")
+
+    return tables
+
+
+def table_to_markdown(table_data: List[List[str]]) -> str:
+    """
+    Convert extracted table data to markdown format.
+
+    Args:
+        table_data: 2D list of cell values (first row = headers)
+
+    Returns:
+        Markdown-formatted table string
+    """
+    if not table_data or not table_data[0]:
+        return ""
+
+    def clean_cell(cell) -> str:
+        """Clean a cell value for markdown."""
+        if cell is None:
+            return ""
+        # Replace newlines and normalize whitespace
+        return str(cell).strip().replace('\n', ' ').replace('|', '\\|')
+
+    headers = [clean_cell(h) for h in table_data[0]]
+    rows = [[clean_cell(c) for c in row] for row in table_data[1:]]
+
+    # Calculate column widths for nice formatting
+    widths = []
+    for i, h in enumerate(headers):
+        col_width = len(h)
+        for row in rows:
+            if i < len(row):
+                col_width = max(col_width, len(row[i]))
+        widths.append(max(col_width, 3))  # Minimum width of 3
+
+    lines = []
+
+    # Header row
+    header_cells = [h.ljust(w) for h, w in zip(headers, widths)]
+    lines.append("| " + " | ".join(header_cells) + " |")
+
+    # Separator row
+    sep_cells = ["-" * w for w in widths]
+    lines.append("|" + "|".join("-" + s + "-" for s in sep_cells) + "|")
+
+    # Data rows
+    for row in rows:
+        # Pad row if shorter than headers
+        padded_row = row + [""] * (len(headers) - len(row))
+        row_cells = [c.ljust(w) for c, w in zip(padded_row, widths)]
+        lines.append("| " + " | ".join(row_cells) + " |")
+
+    return "\n".join(lines)
+
+
+def load_pdf_with_tables(pdf_path: Path) -> Tuple[str, List[Dict]]:
+    """
+    Load PDF text and extract tables, merging them into the document.
+
+    Strategy:
+    1. Extract plain text using pypdf (via PDFReader)
+    2. Extract tables using pdfplumber
+    3. Convert tables to markdown
+    4. Append tables to text with markers
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        Tuple of (enhanced_text, table_info_list)
+    """
+    # Step 1: Get base text using existing PDFReader
+    try:
+        pdf_reader = PDFReader(return_full_document=True)
+        docs = pdf_reader.load_data(pdf_path)
+        base_text = docs[0].text if docs else ""
+    except Exception as e:
+        logger.error(f"Error reading PDF text from {pdf_path}: {e}")
+        base_text = ""
+
+    # Step 2: Extract tables using pdfplumber
+    tables = extract_tables_from_pdf(pdf_path)
+
+    if not tables:
+        # No tables found - return original text
+        return base_text, []
+
+    # Step 3: Convert tables to markdown and append to text
+    table_sections = []
+    enhanced_text = base_text
+
+    for table_info in tables:
+        markdown_table = table_to_markdown(table_info['table_data'])
+        if markdown_table:
+            # Create a marked section for the table
+            section = f"\n\n[EXTRACTED TABLE - Page {table_info['page']}]\n{markdown_table}\n[END TABLE]\n"
+            enhanced_text += section
+
+            table_sections.append({
+                'page': table_info['page'],
+                'table_index': table_info['table_index'],
+                'row_count': len(table_info['table_data']),
+                'col_count': len(table_info['table_data'][0]) if table_info['table_data'] else 0,
+                'markdown': markdown_table
+            })
+
+    return enhanced_text, table_sections
+
+
+# =============================================================================
+# Metadata Extraction
+# =============================================================================
 
 # Prompt for LLM-based metadata extraction
 METADATA_EXTRACTION_PROMPT = """
@@ -127,44 +274,69 @@ def get_default_metadata() -> Dict:
 
 def load_claim_documents(
     data_dir: Optional[Path] = None,
-    extract_metadata: bool = True
+    extract_metadata: bool = True,
+    extract_tables: bool = True
 ) -> List[Document]:
     """
     Load all PDF claim documents from the data directory.
-    
+
     Args:
         data_dir: Path to directory containing PDF files (default: DATA_DIR from config)
         extract_metadata: Whether to use LLM to extract metadata (default: True)
-    
+        extract_tables: Whether to extract tables from PDFs (default: True)
+
     Returns:
         List of LlamaIndex Document objects with metadata
     """
     data_dir = data_dir or DATA_DIR
-    
+
     if not data_dir.exists():
         raise FileNotFoundError(f"Data directory not found: {data_dir}")
-    
+
     logger.info(f"Loading documents from: {data_dir}")
-    
+
     # Count PDF files
     pdf_files = list(data_dir.glob("*.pdf"))
     logger.info(f"Found {len(pdf_files)} PDF files")
-    
+
     if not pdf_files:
         raise ValueError(f"No PDF files found in {data_dir}")
-    
-    # Load documents using SimpleDirectoryReader
-    # Use file_extractor to ensure PDFs are loaded as single documents (not split by page)
-    pdf_reader = PDFReader(return_full_document=True)  # Combine all pages into one document
-    
-    reader = SimpleDirectoryReader(
-        input_dir=str(data_dir),
-        required_exts=[".pdf"],
-        recursive=False,
-        file_extractor={".pdf": pdf_reader}  # Use our configured PDF reader
-    )
-    
-    documents = reader.load_data()
+
+    documents = []
+
+    if extract_tables:
+        # Load PDFs with table extraction
+        logger.info("Loading PDFs with table extraction enabled...")
+        for pdf_path in sorted(pdf_files):
+            text, table_info = load_pdf_with_tables(pdf_path)
+
+            doc = Document(
+                text=text,
+                metadata={
+                    'file_name': pdf_path.name,
+                    'file_path': str(pdf_path),
+                    'has_tables': len(table_info) > 0,
+                    'table_count': len(table_info)
+                }
+            )
+
+            if table_info:
+                logger.info(f"  {pdf_path.name}: Extracted {len(table_info)} table(s)")
+
+            documents.append(doc)
+    else:
+        # Original approach without table extraction
+        pdf_reader = PDFReader(return_full_document=True)
+
+        reader = SimpleDirectoryReader(
+            input_dir=str(data_dir),
+            required_exts=[".pdf"],
+            recursive=False,
+            file_extractor={".pdf": pdf_reader}
+        )
+
+        documents = reader.load_data()
+
     logger.info(f"Loaded {len(documents)} documents")
     
     # Extract metadata if requested

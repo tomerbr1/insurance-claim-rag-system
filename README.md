@@ -17,18 +17,19 @@ A multi-agent retrieval-augmented generation (RAG) system for insurance claim do
 
 ## Overview
 
-This system processes 10 insurance claim documents and provides intelligent query routing to answer both:
+This system processes 13 insurance claim documents and provides intelligent query routing to answer both:
 - **Structured queries**: "Show me all claims over $100k" → SQL
 - **Narrative queries**: "What happened in claim X?" → RAG
 
 ### Features
 
-✅ **Hybrid Architecture** - SQL + RAG for optimal performance  
-✅ **3-Way Query Routing** - Intelligent classification to specialized agents  
-✅ **Hierarchical Chunking** - 2-level chunks (1024/256 tokens)  
-✅ **Auto-Merging Retrieval** - Automatic context expansion  
-✅ **Multi-Level Summaries** - Chunk → Section → Document summaries  
-✅ **LLM-as-Judge Evaluation** - Automated quality assessment  
+✅ **Hybrid Architecture** - SQL + RAG for optimal performance
+✅ **3-Way Query Routing** - Intelligent classification to specialized agents
+✅ **Hierarchical Chunking** - 2-level chunks (1024/256 tokens)
+✅ **Auto-Merging Retrieval** - Automatic context expansion
+✅ **Multi-Level Summaries** - Chunk → Section → Document summaries
+✅ **Table Extraction** - Automatic table detection and markdown conversion
+✅ **LLM-as-Judge Evaluation** - Automated quality assessment
 ✅ **MCP Integration** - ChromaDB vector store access  
 
 ---
@@ -96,12 +97,14 @@ This system processes 10 insurance claim documents and provides intelligent quer
 ### Data Flow
 
 ```
-PDF Documents (10 claims)
+PDF Documents (13 claims, 3 with tables)
      │
      ▼
 ┌────────────────────────────────────────────┐
 │           DATA LOADING                      │
 │  • Load PDFs with SimpleDirectoryReader    │
+│  • Extract tables using pdfplumber         │
+│  • Convert tables to markdown format       │
 │  • Extract metadata using LLM (GPT-4o-mini)│
 │    (not regex - handles format variations) │
 └────────────────┬───────────────────────────┘
@@ -153,13 +156,14 @@ PDF Documents (10 claims)
 
 | Phase | Component | Output | Notes |
 |-------|-----------|--------|-------|
-| 1. Load | `SimpleDirectoryReader` | 10 Documents | Raw PDF text |
-| 2. Extract | LLM (GPT-4o-mini) | Metadata dicts | ~$0.01 cost |
-| 3. Store | SQLite + Chunking | DB + Nodes | Dual path |
-| 4. Summarize | MapReduce (GPT-4) | Summary nodes | 3 levels |
-| 5. Embed | ChromaDB + OpenAI | Vector index | Leaf nodes only |
-| 6. Build | Agent creation | 4 agents | Router + 3 specialists |
-| 7. Query | Runtime routing | Responses | Per-query execution |
+| 1. Load | `SimpleDirectoryReader` + pdfplumber | 13 Documents | Raw PDF text + tables |
+| 2. Tables | pdfplumber | Markdown tables | Appended to text |
+| 3. Extract | LLM (GPT-4o-mini) | Metadata dicts | ~$0.01 cost |
+| 4. Store | SQLite + Chunking | DB + Nodes | Dual path |
+| 5. Summarize | MapReduce (GPT-4) | Summary nodes | 3 levels |
+| 6. Embed | ChromaDB + OpenAI | Vector index | Leaf nodes only |
+| 7. Build | Agent creation | 4 agents | Router + 3 specialists |
+| 8. Query | Runtime routing | Responses | Per-query execution |
 
 **Total build time:** ~2-3 minutes | **Total cost:** ~$0.10-0.15
 
@@ -169,23 +173,24 @@ PDF Documents (10 claims)
 
 The system processes data through a carefully orchestrated pipeline:
 
-**Pipeline Execution Time:** ~2-3 minutes for 10 documents
+**Pipeline Execution Time:** ~2-3 minutes for 13 documents
 
 **Phase-by-Phase Breakdown:**
 
 | Phase | Time | LLM Calls | Storage | Notes |
 |-------|------|-----------|---------|-------|
-| **1. Load PDFs** | ~5s | 0 | Memory | 10 PDFs → Document objects |
-| **2. Extract Metadata** | ~20s | 10 | SQLite | GPT-4o-mini, 1 call/doc |
-| **3. Chunk Documents** | ~10s | 0 | Memory + DocStore | 2 levels, ~200-300 nodes |
-| **4. Build Summary Index** | ~90-120s | ~150-200 | VectorStore | Most expensive phase |
-| **5. Build Vector Index** | ~30-45s | ~150 | ChromaDB | Embedding generation |
-| **6. Create Agents** | ~1s | 0 | Memory | Configure 4 agents |
-| **7. Ready for Queries** | Instant | 1-2/query | - | Runtime queries |
+| **1. Load PDFs** | ~5s | 0 | Memory | 13 PDFs → Document objects |
+| **2. Extract Tables** | ~2s | 0 | Memory | pdfplumber → markdown |
+| **3. Extract Metadata** | ~25s | 13 | SQLite | GPT-4o-mini, 1 call/doc |
+| **4. Chunk Documents** | ~10s | 0 | Memory + DocStore | 2 levels, ~250-350 nodes |
+| **5. Build Summary Index** | ~90-120s | ~180-220 | VectorStore | Most expensive phase |
+| **6. Build Vector Index** | ~30-45s | ~180 | ChromaDB | Embedding generation |
+| **7. Create Agents** | ~1s | 0 | Memory | Configure 4 agents |
+| **8. Ready for Queries** | Instant | 1-2/query | - | Runtime queries |
 
 **Storage Footprint:**
-- **SQLite database**: ~50 KB (10 rows of structured metadata)
-- **ChromaDB vector store**: ~5-10 MB (embeddings + metadata)
+- **SQLite database**: ~65 KB (13 rows of structured metadata)
+- **ChromaDB vector store**: ~6-12 MB (embeddings + metadata)
 - **In-memory objects**: ~15-20 MB (document store, nodes, agents)
 
 **Cost Breakdown (per full rebuild):**
@@ -364,6 +369,86 @@ This ensures precise retrieval with automatic context expansion when needed.
 - Richer functionality than custom tools
 - More relevant to production systems
 
+**Implementation**:
+
+The system uses an MCP-style wrapper (`ChromaDBMCPClient`) that provides:
+
+| Tool | Description | Used By |
+|------|-------------|---------|
+| `list_collections` | List all vector store collections | Router Agent |
+| `collection_stats` | Get collection document count | Router Agent |
+| `collection_count` | Quick document count | Router Agent |
+| `direct_search` | Semantic similarity search | Available |
+| `peek_collection` | Preview collection documents | Available |
+
+**Router Agent MCP Integration**:
+
+The Router Agent calls MCP tools before making routing decisions, demonstrating agent-tool interaction:
+
+```
+💬 Query: What was the towing cost?
+
+🔧 [MCP TOOL CALL] collection_stats()
+   └─ Result: Collection 'insurance_claims': 150 documents
+🔧 [MCP TOOL CALL] collection_stats('insurance_claims_summaries')
+   └─ Result: Collection 'insurance_claims_summaries': 200 documents
+
+🔀 Routed to: NEEDLE agent
+💡 Answer: The towing cost was $185.00 (Tow Invoice #T-8827)
+```
+
+This visible tool call output demonstrates the MCP integration in action.
+
+**Interactive MCP Status**:
+
+Use the `mcp` command in interactive mode to view MCP client status and test tools.
+
+### 6. Table Extraction (pdfplumber)
+
+**Decision**: Extract tables from PDFs using pdfplumber and convert to markdown for LLM consumption.
+
+**Rationale**:
+- Insurance documents often contain tabular data (financial breakdowns, coverage limits, treatment timelines)
+- Standard PDF text extraction (pypdf) loses table structure, making data hard to interpret
+- pdfplumber preserves table structure as 2D arrays
+- Markdown format is well-understood by LLMs and maintains visual structure
+
+**Implementation**:
+
+The system uses a dual-extraction approach:
+1. **Base text**: pypdf extracts narrative content
+2. **Tables**: pdfplumber detects and extracts tables as 2D arrays
+3. **Conversion**: Tables are converted to markdown format
+4. **Integration**: Tables are appended to document text with markers
+
+**Table-Enabled Documents**:
+
+| Claim ID | Table Type | Key Data |
+|----------|------------|----------|
+| CLM-2024-006001 | Financial Breakdown | 8 line items, costs, dates |
+| CLM-2024-006002 | Coverage/Policy | 7 coverage types with limits |
+| CLM-2024-006003 | Treatment Timeline | 12 events with status |
+
+**Example Extracted Table**:
+```
+[EXTRACTED TABLE - Page 1]
+| Item             | Category   | Amount     | Date       |
+|------------------|------------|------------|------------|
+| Roof replacement | Structural | $12,500.00 | 2024-09-15 |
+| Water cleanup    | Restoration| $3,200.00  | 2024-09-12 |
+[END TABLE]
+```
+
+**Configuration**:
+- `EXTRACT_TABLES=true` - Enable/disable table extraction
+- `TABLE_MIN_ROWS=2` - Minimum rows for valid table
+- `TABLE_MIN_COLS=2` - Minimum columns for valid table
+
+**Test Queries for Tables**:
+- "What was the exact cost of roof replacement?" → $12,500.00
+- "What is the Medical Payments coverage limit?" → $5,000
+- "How much did the MRI cost?" → $2,800.00
+
 ---
 
 ## Installation
@@ -520,12 +605,15 @@ insurance-claim-rag-system/
 │
 ├── insurance_claims_data/    # PDF claim documents
 │   ├── CLM_2024_001847.pdf
-│   ├── ... (10 PDFs)
+│   ├── ... (13 PDFs total, 3 with tables)
 │   └── README.md             # Data documentation
+│
+├── scripts/
+│   └── generate_table_pdfs.py # Generate PDFs with embedded tables
 │
 ├── src/
 │   ├── config.py             # Configuration & settings
-│   ├── data_loader.py        # PDF loading + LLM metadata extraction
+│   ├── data_loader.py        # PDF loading + table extraction + LLM metadata
 │   ├── metadata_store.py     # SQLite for structured queries
 │   ├── chunking.py           # Hierarchical node parser
 │   ├── indexing.py           # Summary & vector index builders
