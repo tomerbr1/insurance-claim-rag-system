@@ -302,17 +302,16 @@ def build_hierarchical_index(
     
     # Setup ChromaDB
     persist_dir.mkdir(parents=True, exist_ok=True)
-    
+
     chroma_client = chromadb.PersistentClient(path=str(persist_dir))
-    
+
     # Delete existing collection if it exists (for fresh builds)
-    try:
+    existing_collections = [c.name for c in chroma_client.list_collections()]
+    if collection_name in existing_collections:
+        logger.info(f"Deleting existing collection: {collection_name}")
         chroma_client.delete_collection(collection_name)
-        logger.info(f"Deleted existing collection: {collection_name}")
-    except Exception:
-        pass
-    
-    chroma_collection = chroma_client.create_collection(
+
+    chroma_collection = chroma_client.get_or_create_collection(
         name=collection_name,
         metadata={"description": "Insurance claims hierarchical index"}
     )
@@ -404,16 +403,15 @@ def persist_summary_index(
     try:
         # Setup ChromaDB
         chroma_client = chromadb.PersistentClient(path=str(persist_dir))
-        
+
         # Delete existing summary collection if it exists
-        try:
+        existing_collections = [c.name for c in chroma_client.list_collections()]
+        if SUMMARY_COLLECTION_NAME in existing_collections:
+            logger.info(f"Deleting existing summary collection: {SUMMARY_COLLECTION_NAME}")
             chroma_client.delete_collection(SUMMARY_COLLECTION_NAME)
-            logger.info(f"Deleted existing summary collection")
-        except Exception:
-            pass
-        
+
         # Create new collection
-        summary_collection = chroma_client.create_collection(
+        summary_collection = chroma_client.get_or_create_collection(
             name=SUMMARY_COLLECTION_NAME,
             metadata={"description": "Insurance claims summary nodes"}
         )
