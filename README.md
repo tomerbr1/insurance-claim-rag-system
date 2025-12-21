@@ -23,14 +23,14 @@ This system processes 13 insurance claim documents and provides intelligent quer
 
 ### Features
 
-✅ **Hybrid Architecture** - SQL + RAG for optimal performance
-✅ **3-Way Query Routing** - Intelligent classification to specialized agents
-✅ **Hierarchical Chunking** - 2-level chunks (1024/256 tokens)
-✅ **Auto-Merging Retrieval** - Automatic context expansion
-✅ **Multi-Level Summaries** - Chunk → Section → Document summaries
-✅ **Table Extraction** - Automatic table detection and markdown conversion
-✅ **LLM-as-Judge Evaluation** - Automated quality assessment
-✅ **MCP Integration** - ChromaDB vector store access  
+- **Hybrid Architecture** - SQL + RAG for optimal performance
+- **3-Way Query Routing** - Intelligent classification to specialized agents
+- **Hierarchical Chunking** - 2-level chunks (1024/256 tokens)
+- **Auto-Merging Retrieval** - Automatic context expansion
+- **Multi-Level Summaries** - Chunk → Section → Document summaries
+- **Table Extraction** - Automatic table detection and markdown conversion
+- **LLM-as-Judge Evaluation** - Automated quality assessment
+- **MCP Integration** - ChromaDB vector store access  
 
 ---
 
