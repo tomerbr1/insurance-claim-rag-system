@@ -44,6 +44,12 @@ AUTO_MERGE_THRESHOLD = 0.5  # Merge if >50% of children match
 # ChromaDB Configuration
 CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "insurance_claims")
 
+# MCP Configuration
+# Mode: "direct" uses direct ChromaDB access (current), "server" for future true MCP
+MCP_MODE = os.getenv("MCP_MODE", "direct")
+MCP_ENABLED = os.getenv("MCP_ENABLED", "true").lower() == "true"
+MCP_LOG_TOOL_CALLS = os.getenv("MCP_LOG_TOOL_CALLS", "true").lower() == "true"
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
@@ -149,6 +155,10 @@ if __name__ == "__main__":
     print(f"  Evaluation Model: {GEMINI_EVAL_MODEL} (Gemini)")
     print(f"\n⚙️  Settings:")
     print(f"  Chunk Sizes: {CHUNK_SIZES}")
+    print(f"\n🔌 MCP Configuration:")
+    print(f"  Mode: {MCP_MODE}")
+    print(f"  Enabled: {MCP_ENABLED}")
+    print(f"  Log Tool Calls: {MCP_LOG_TOOL_CALLS}")
     print(f"\n🔑 API Keys:")
     print(f"  OpenAI: {'✅ Set' if OPENAI_API_KEY else '❌ Not set'}")
     print(f"  Google: {'✅ Set' if GOOGLE_API_KEY else '❌ Not set'}")

@@ -125,23 +125,27 @@ def load_existing_system():
     needle_agent = create_needle_agent(hierarchical_index, docstore, llm)
     print("   ✅ Needle agent (precise RAG)")
     
-    # Create router
-    print("\n🔀 Creating router...")
-    router = create_router_agent(
-        structured_engine=structured_agent,
-        summary_engine=summary_agent,
-        needle_engine=needle_agent,
-        llm=llm,
-        verbose=True
-    )
-    print("✅ Router created (3-way: structured/summary/needle)")
-    
-    # Initialize MCP client
+    # Initialize MCP client FIRST (needed for router)
     print("\n🔌 Initializing MCP client...")
     mcp_client = ChromaDBMCPClient()
     mcp_client.connect()
     mcp_tools = create_mcp_tools(mcp_client)
     print(f"✅ MCP client connected with {len(mcp_tools)} tools")
+    tool_names = [t.metadata.name for t in mcp_tools]
+    print(f"   Tools: {', '.join(tool_names)}")
+
+    # Create router with MCP tools for system introspection
+    print("\n🔀 Creating router with MCP integration...")
+    router = create_router_agent(
+        structured_engine=structured_agent,
+        summary_engine=summary_agent,
+        needle_engine=needle_agent,
+        llm=llm,
+        verbose=True,
+        mcp_tools=mcp_tools  # Router can use MCP tools
+    )
+    print("✅ Router created (3-way: structured/summary/needle)")
+    print("   Router will call MCP tools during query processing")
     
     print("\n" + "=" * 70)
     print("⚡ INSTANT STARTUP COMPLETE!")
@@ -292,23 +296,27 @@ def build_system(skip_cleanup: bool = False):
     needle_agent = create_needle_agent(hierarchical_index, docstore, llm)
     print("   ✅ Needle agent (precise RAG)")
     
-    # Step 7: Create router
-    print("\n🔀 Step 7/7: Creating router...")
-    router = create_router_agent(
-        structured_engine=structured_agent,
-        summary_engine=summary_agent,
-        needle_engine=needle_agent,
-        llm=llm,
-        verbose=True
-    )
-    print("✅ Router created (3-way: structured/summary/needle)")
-    
-    # Initialize MCP client
+    # Initialize MCP client FIRST (needed for router)
     print("\n🔌 Initializing MCP client...")
     mcp_client = ChromaDBMCPClient()
     mcp_client.connect()
     mcp_tools = create_mcp_tools(mcp_client)
     print(f"✅ MCP client connected with {len(mcp_tools)} tools")
+    tool_names = [t.metadata.name for t in mcp_tools]
+    print(f"   Tools: {', '.join(tool_names)}")
+
+    # Step 7: Create router with MCP integration
+    print("\n🔀 Step 7/7: Creating router with MCP integration...")
+    router = create_router_agent(
+        structured_engine=structured_agent,
+        summary_engine=summary_agent,
+        needle_engine=needle_agent,
+        llm=llm,
+        verbose=True,
+        mcp_tools=mcp_tools  # Router can use MCP tools
+    )
+    print("✅ Router created (3-way: structured/summary/needle)")
+    print("   Router will call MCP tools during query processing")
     
     print("\n" + "=" * 70)
     print("✅ SYSTEM INITIALIZATION COMPLETE!")
@@ -347,10 +355,12 @@ def run_interactive(system: dict):
         print("   • STRUCTURED: Exact lookups, filters, aggregations (SQL)")
         print("   • SUMMARY: High-level overviews, timelines (RAG)")
         print("   • NEEDLE: Precise fact retrieval (RAG + auto-merge)")
+        print("   • MCP: Router uses MCP tools for system introspection")
         print("\nAvailable Commands:")
         print("   'query' - Send a query to the system")
         print("   'eval'  - Run evaluation suite")
         print("   'stats' - Show system statistics")
+        print("   'mcp'   - Show MCP client status and tools")
         print("   'quit'  - Exit the system")
         print("=" * 70)
     
@@ -379,7 +389,12 @@ def run_interactive(system: dict):
             show_statistics(system)
             show_menu()
             continue
-        
+
+        if command == 'mcp':
+            show_mcp_status(system)
+            show_menu()
+            continue
+
         if command == 'query':
             # Enter query mode - stay in loop until user types 'back'
             print("\n" + "=" * 70)
@@ -423,7 +438,7 @@ def run_interactive(system: dict):
         
         # Unknown command
         print(f"❌ Unknown command: '{command}'")
-        print("💡 Available commands: query, eval, stats, quit")
+        print("💡 Available commands: query, eval, stats, mcp, quit")
     
     print("\n👋 Goodbye!")
 
@@ -453,11 +468,57 @@ def run_evaluation_mode(system: dict, subset: int = None, delay: float = 2.0):
     print_evaluation_summary(results)
 
 
+def show_mcp_status(system: dict):
+    """Show MCP client status and available tools."""
+    mcp_client = system['mcp_client']
+    mcp_tools = system['mcp_tools']
+
+    print("\n🔌 MCP CLIENT STATUS")
+    print("=" * 60)
+
+    # Server info
+    server_info = mcp_client.server_info
+    print(f"\n📡 Server Information:")
+    print(f"   Name: {server_info.get('name', 'unknown')}")
+    print(f"   Version: {server_info.get('version', 'unknown')}")
+    print(f"   Protocol: {server_info.get('protocolVersion', 'unknown')}")
+    print(f"   Status: {server_info.get('status', 'unknown')}")
+    print(f"   Mode: direct (using ChromaDB library directly)")
+
+    # Available tools
+    print(f"\n🔧 Available MCP Tools ({len(mcp_tools)}):")
+    for tool in mcp_tools:
+        print(f"   • {tool.metadata.name}: {tool.metadata.description}")
+
+    # Test tool calls
+    print(f"\n🧪 Testing MCP Tools:")
+    for tool in mcp_tools[:3]:  # Test first 3 tools
+        try:
+            result = tool.fn()
+            display_result = result if len(str(result)) < 60 else str(result)[:57] + "..."
+            print(f"   ✅ {tool.metadata.name}(): {display_result}")
+        except Exception as e:
+            print(f"   ❌ {tool.metadata.name}(): Error - {e}")
+
+    # Router integration status
+    router = system['router']
+    if hasattr(router, '_mcp_tools') and router._mcp_tools:
+        print(f"\n🔀 Router MCP Integration:")
+        print(f"   ✅ Router has {len(router._mcp_tools)} MCP tools configured")
+        print(f"   ✅ Router will call MCP tools during query processing")
+        print(f"   Log tool calls: {'enabled' if router._log_tool_calls else 'disabled'}")
+    else:
+        print(f"\n🔀 Router MCP Integration:")
+        print(f"   ⚠️  Router does not have MCP tools configured")
+
+    print("=" * 60)
+
+
 def show_statistics(system: dict):
     """Show system statistics."""
     metadata_store = system['metadata_store']
     mcp_client = system['mcp_client']
-    
+
     print("\n📊 SYSTEM STATISTICS")
     print("=" * 50)
     

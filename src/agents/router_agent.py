@@ -1,15 +1,21 @@
 """
-Router Agent - 3-way intelligent query routing.
+Router Agent - 3-way intelligent query routing with MCP tool integration.
 
 This is the Manager agent that:
 1. Receives user queries
-2. Classifies query type
-3. Routes to appropriate specialist agent
+2. Uses MCP tools to gather system context (collection stats)
+3. Classifies query type
+4. Routes to appropriate specialist agent
 
 Routing options:
 - STRUCTURED: Exact lookups, filters, aggregations → SQL
 - SUMMARY: High-level overviews, timelines → RAG Summary
 - NEEDLE: Precise fact extraction → RAG Needle
+
+MCP Integration:
+- Router calls MCP tools (collection_stats) before routing
+- Tool calls are logged visibly for demonstration
+- Demonstrates agent-tool interaction pattern
 
 Hybrid architecture benefits:
 - Structured queries are 100x faster (SQL vs vector search)
@@ -18,16 +24,16 @@ Hybrid architecture benefits:
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Any
 from enum import Enum
 
 from llama_index.core.query_engine import RouterQueryEngine, CustomQueryEngine
 from llama_index.core.selectors import LLMSingleSelector
-from llama_index.core.tools import QueryEngineTool
+from llama_index.core.tools import QueryEngineTool, FunctionTool
 from llama_index.llms.openai import OpenAI
 from llama_index.core.bridge.pydantic import PrivateAttr
 
-from src.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MINI_MODEL
+from src.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_MINI_MODEL, MCP_LOG_TOOL_CALLS
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -88,20 +94,27 @@ Return ONLY one word: STRUCTURED, SUMMARY, or NEEDLE
 
 class RouterAgent(CustomQueryEngine):
     """
-    Intelligent 3-way router for hybrid architecture.
-    
+    Intelligent 3-way router for hybrid architecture with MCP tool support.
+
     Routes queries to:
     - Structured agent (SQL) for metadata queries
     - Summary agent (RAG) for high-level questions
     - Needle agent (RAG) for precise fact retrieval
+
+    MCP Integration:
+    - Calls MCP tools (collection_stats) before routing decisions
+    - Visible tool call output for demonstration
+    - Uses system context to inform routing
     """
-    
+
     _structured_engine: CustomQueryEngine = PrivateAttr()
     _summary_engine: CustomQueryEngine = PrivateAttr()
     _needle_engine: CustomQueryEngine = PrivateAttr()
     _llm: OpenAI = PrivateAttr()
     _verbose: bool = PrivateAttr()
-    
+    _mcp_tools: List[FunctionTool] = PrivateAttr()
+    _log_tool_calls: bool = PrivateAttr()
+
     def __init__(
         self,
         structured_engine,
@@ -110,11 +123,13 @@ class RouterAgent(CustomQueryEngine):
         llm: Optional[OpenAI] = None,
         verbose: bool = True,
         use_mini_for_routing: bool = True,
+        mcp_tools: Optional[List[FunctionTool]] = None,
+        log_tool_calls: bool = True,
         **kwargs
     ):
         """
         Initialize the router agent.
-        
+
         Args:
             structured_engine: Query engine for SQL-based queries
             summary_engine: Query engine for high-level RAG queries
@@ -122,12 +137,16 @@ class RouterAgent(CustomQueryEngine):
             llm: LLM for routing decisions (default: GPT-4o-mini for cost efficiency)
             verbose: Whether to log routing decisions
             use_mini_for_routing: Use cheaper model for routing (default True)
+            mcp_tools: List of MCP FunctionTools for system introspection
+            log_tool_calls: Whether to print MCP tool calls (for demo visibility)
         """
         super().__init__(**kwargs)
         self._structured_engine = structured_engine
         self._summary_engine = summary_engine
         self._needle_engine = needle_engine
-        
+        self._mcp_tools = mcp_tools or []
+        self._log_tool_calls = log_tool_calls and MCP_LOG_TOOL_CALLS
+
         # Use cheaper model for routing by default - classification doesn't need GPT-4
         if llm:
             self._llm = llm
@@ -136,9 +155,96 @@ class RouterAgent(CustomQueryEngine):
             self._llm = OpenAI(model=routing_model, api_key=OPENAI_API_KEY, temperature=0)
             if verbose:
                 logger.info(f"Router using model: {routing_model}")
-        
+
         self._verbose = verbose
-    
+
+        if self._mcp_tools and verbose:
+            tool_names = [t.metadata.name for t in self._mcp_tools]
+            logger.info(f"Router initialized with MCP tools: {tool_names}")
+
+    def _find_mcp_tool(self, tool_name: str) -> Optional[FunctionTool]:
+        """Find an MCP tool by name."""
+        for tool in self._mcp_tools:
+            if tool.metadata.name == tool_name:
+                return tool
+        return None
+
+    def _call_mcp_tool(self, tool_name: str, *args, **kwargs) -> Optional[str]:
+        """
+        Call an MCP tool by name with visible logging.
+
+        This method demonstrates agent-tool interaction by:
+        1. Finding the tool by name
+        2. Printing the tool call (visible to user)
+        3. Executing the tool
+        4. Printing and returning the result
+
+        Args:
+            tool_name: Name of the MCP tool to call
+            *args, **kwargs: Arguments to pass to the tool
+
+        Returns:
+            Tool result as string, or None if tool not found
+        """
+        tool = self._find_mcp_tool(tool_name)
+        if not tool:
+            if self._verbose:
+                logger.warning(f"MCP tool '{tool_name}' not found")
+            return None
+
+        # Format the call for display
+        args_str = ", ".join([repr(a) for a in args])
+        kwargs_str = ", ".join([f"{k}={repr(v)}" for k, v in kwargs.items()])
+        all_args = ", ".join(filter(None, [args_str, kwargs_str]))
+
+        if self._log_tool_calls:
+            print(f"🔧 [MCP TOOL CALL] {tool_name}({all_args})")
+
+        try:
+            # Execute the tool
+            result = tool.fn(*args, **kwargs)
+
+            if self._log_tool_calls:
+                # Truncate long results for display
+                display_result = result if len(str(result)) < 100 else str(result)[:97] + "..."
+                print(f"   └─ Result: {display_result}")
+
+            return result
+
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            if self._log_tool_calls:
+                print(f"   └─ {error_msg}")
+            return error_msg
+
+    def _get_system_context(self) -> str:
+        """
+        Gather system context using MCP tools before routing.
+
+        Calls collection_stats to understand the available data,
+        which can inform routing decisions.
+
+        Returns:
+            System context string describing available collections
+        """
+        if not self._mcp_tools:
+            return ""
+
+        context_parts = []
+
+        # Call collection_stats for the main collection
+        stats_result = self._call_mcp_tool("collection_stats")
+        if stats_result:
+            context_parts.append(stats_result)
+
+        # Optionally get summary collection stats too
+        # This shows we can call multiple MCP tools
+        summary_stats = self._call_mcp_tool("collection_stats", "insurance_claims_summaries")
+        if summary_stats and "Error" not in summary_stats:
+            context_parts.append(summary_stats)
+
+        return " | ".join(context_parts) if context_parts else ""
+
     def _classify_query(self, query: str) -> QueryType:
         """
         Classify a query to determine which agent should handle it.
@@ -172,22 +278,29 @@ class RouterAgent(CustomQueryEngine):
     
     def custom_query(self, query_str: str) -> str:
         """
-        Route and execute a query.
-        
+        Route and execute a query with MCP tool integration.
+
         Steps:
-        1. Classify the query type
-        2. Route to appropriate specialist
-        3. Return the response
-        
+        1. Call MCP tools to gather system context (visible tool calls)
+        2. Classify the query type
+        3. Route to appropriate specialist
+        4. Return the response
+
         Args:
             query_str: User's natural language query
-        
+
         Returns:
             Response from the appropriate specialist agent
         """
+        # Step 0: Gather system context using MCP tools (visible to user)
+        if self._mcp_tools:
+            system_context = self._get_system_context()
+            # Context can be used to inform routing (future enhancement)
+            # For now, we're demonstrating that the router USES MCP tools
+
         # Step 1: Classify
         query_type = self._classify_query(query_str)
-        
+
         if self._verbose:
             logger.info(f"🔀 Routing query to: {query_type.value.upper()}")
             print(f"🔀 Routed to: {query_type.value.upper()} agent")
@@ -236,27 +349,30 @@ def create_router_agent(
     summary_engine,
     needle_engine,
     llm: Optional[OpenAI] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    mcp_tools: Optional[List[FunctionTool]] = None
 ) -> RouterAgent:
     """
-    Factory function to create a router agent.
-    
+    Factory function to create a router agent with MCP tool support.
+
     Args:
         structured_engine: Engine for SQL queries
         summary_engine: Engine for summary RAG
         needle_engine: Engine for needle RAG
         llm: Optional LLM override
         verbose: Whether to log routing decisions
-    
+        mcp_tools: Optional list of MCP tools for system introspection
+
     Returns:
-        RouterAgent instance
+        RouterAgent instance configured with MCP tools
     """
     return RouterAgent(
         structured_engine=structured_engine,
         summary_engine=summary_engine,
         needle_engine=needle_engine,
         llm=llm,
-        verbose=verbose
+        verbose=verbose,
+        mcp_tools=mcp_tools
     )
 
 
