@@ -6,7 +6,9 @@
       "Bash(source .venv/bin/activate)",
       "Bash(python3:*)",
       "Bash(source:*)",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "Bash(sqlite3:*)",
+      "Bash(ls:*)"
     ]
   }
 }

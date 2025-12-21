@@ -462,33 +462,44 @@ def persist_docstore(
 ) -> bool:
     """
     Persist the document store to JSON for auto-merging support.
-    
+
     The docstore contains all hierarchical nodes (small + large) and their
     parent-child relationships, which is needed for the auto-merging retriever.
-    
+
     Args:
         docstore: SimpleDocumentStore with all nodes
         persist_dir: Directory for persistence
-    
+
     Returns:
         True if successful
     """
     persist_dir = persist_dir or CHROMA_DIR
     persist_dir.mkdir(parents=True, exist_ok=True)
-    
+
     docstore_path = persist_dir / DOCSTORE_FILE
-    
+
     logger.info(f"Persisting docstore to {docstore_path}...")
-    
+
+    def serialize_relationship(v):
+        """Serialize a relationship value (single or list of RelatedNodeInfo)."""
+        if hasattr(v, 'node_id'):
+            # Single RelatedNodeInfo
+            return v.node_id
+        elif isinstance(v, list):
+            # List of RelatedNodeInfo (for CHILD relationships)
+            return [item.node_id if hasattr(item, 'node_id') else str(item) for item in v]
+        else:
+            return str(v)
+
     try:
         # Get all documents from docstore
         all_docs = docstore.docs
-        
+
         # Serialize to JSON-friendly format
         docstore_data = {
             'nodes': {}
         }
-        
+
         for doc_id, doc in all_docs.items():
             # Serialize node data
             node_data = {
@@ -497,22 +508,22 @@ def persist_docstore(
                 'metadata': doc.metadata,
                 'class_name': doc.class_name()
             }
-            
+
             # Handle relationships (parent/child)
             if hasattr(doc, 'relationships') and doc.relationships:
                 node_data['relationships'] = {
-                    str(k): v.node_id if hasattr(v, 'node_id') else str(v)
+                    str(k): serialize_relationship(v)
                     for k, v in doc.relationships.items()
                 }
-            
+
             docstore_data['nodes'][doc_id] = node_data
-        
+
         with open(docstore_path, 'w') as f:
             json.dump(docstore_data, f, indent=2)
-        
+
         logger.info(f"✅ Persisted docstore with {len(docstore_data['nodes'])} nodes")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error persisting docstore: {e}")
         return False
@@ -590,45 +601,90 @@ def load_docstore(
 ) -> Optional[SimpleDocumentStore]:
     """
     Load persisted docstore from JSON.
-    
+
+    Restores nodes WITH their parent-child relationships, which is
+    critical for the auto-merging retriever to work.
+
     Args:
         persist_dir: Directory where docstore is persisted
-    
+
     Returns:
         SimpleDocumentStore or None if not found
     """
+    from llama_index.core.schema import NodeRelationship, RelatedNodeInfo
+
     persist_dir = persist_dir or CHROMA_DIR
     docstore_path = persist_dir / DOCSTORE_FILE
-    
+
     if not docstore_path.exists():
         logger.warning(f"Docstore file not found: {docstore_path}")
         return None
-    
+
     try:
         logger.info(f"Loading docstore from {docstore_path}...")
-        
+
         with open(docstore_path, 'r') as f:
             docstore_data = json.load(f)
-        
-        # Reconstruct nodes
-        docstore = SimpleDocumentStore()
-        nodes = []
-        
+
+        # First pass: Create all nodes without relationships
+        nodes_dict = {}
         for node_id, node_data in docstore_data['nodes'].items():
             node = TextNode(
                 text=node_data['text'],
                 metadata=node_data['metadata'],
                 id_=node_data['node_id']
             )
-            nodes.append(node)
-        
-        docstore.add_documents(nodes)
-        
-        logger.info(f"✅ Loaded docstore with {len(nodes)} nodes")
+            nodes_dict[node_data['node_id']] = node
+
+        # Second pass: Restore relationships
+        for node_id, node_data in docstore_data['nodes'].items():
+            if 'relationships' in node_data and node_data['relationships']:
+                node = nodes_dict[node_data['node_id']]
+                relationships = {}
+
+                for rel_type_str, related_value in node_data['relationships'].items():
+                    # Convert string back to NodeRelationship enum
+                    try:
+                        rel_type = NodeRelationship(rel_type_str)
+                    except ValueError:
+                        # Try numeric conversion for older formats
+                        try:
+                            rel_type = NodeRelationship(int(rel_type_str))
+                        except (ValueError, TypeError):
+                            logger.warning(f"Unknown relationship type: {rel_type_str}")
+                            continue
+
+                    # Handle both single ID and list of IDs
+                    if isinstance(related_value, list):
+                        # List of child node IDs
+                        relationships[rel_type] = [
+                            RelatedNodeInfo(node_id=rid) for rid in related_value
+                        ]
+                    elif isinstance(related_value, str):
+                        # Check if it's an old-format string representation of a list
+                        if related_value.startswith('[') and 'RelatedNodeInfo' in related_value:
+                            # Old format - skip and log warning
+                            logger.warning(f"Found old-format relationship data for {node_data['node_id']}, skipping")
+                            continue
+                        # Single node ID
+                        relationships[rel_type] = RelatedNodeInfo(node_id=related_value)
+                    else:
+                        logger.warning(f"Unexpected relationship value type: {type(related_value)}")
+                        continue
+
+                node.relationships = relationships
+
+        # Add all nodes to docstore
+        docstore = SimpleDocumentStore()
+        docstore.add_documents(list(nodes_dict.values()))
+
+        logger.info(f"✅ Loaded docstore with {len(nodes_dict)} nodes (relationships restored)")
         return docstore
-        
+
     except Exception as e:
         logger.error(f"Error loading docstore: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

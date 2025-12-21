@@ -19,7 +19,6 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.retrievers import AutoMergingRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.storage.docstore import SimpleDocumentStore
-from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.llms.openai import OpenAI
 
 from src.config import (
@@ -99,12 +98,11 @@ def create_needle_query_engine(
     retriever = create_auto_merging_retriever(index, docstore)
     
     # Create query engine with custom prompt
+    # Note: Removed SimilarityPostprocessor as it was filtering out valid results.
+    # Cosine similarity scores vary by embedding model; a fixed cutoff is too aggressive.
     query_engine = RetrieverQueryEngine.from_args(
         retriever=retriever,
-        llm=llm,
-        node_postprocessors=[
-            SimilarityPostprocessor(similarity_cutoff=0.7)  # Filter low-confidence
-        ]
+        llm=llm
     )
     
     logger.info("✅ Needle query engine created")
