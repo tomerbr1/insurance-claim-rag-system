@@ -36,6 +36,8 @@ This system processes 13 insurance claim documents and provides intelligent quer
 
 ## Architecture
 
+![System Architecture](assets/architecture_diagram.jpg)
+
 ### High-Level System Flow
 
 ```
