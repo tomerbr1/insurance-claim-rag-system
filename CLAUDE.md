@@ -109,8 +109,14 @@ python main.py
 # Instant startup (reuse existing data, no cleanup prompt)
 python main.py --no-cleanup
 
-# Evaluation mode (all test cases)
+# Basic evaluation (model-based only)
 python main.py --eval
+
+# Multi-grader evaluation with HTML report (recommended)
+python main.py --graders --no-cleanup
+
+# Multi-grader with subset and human grades
+python main.py --graders --eval-subset 10 --include-human
 
 # Evaluation with rate limit handling
 python main.py --eval --eval-subset 3 --eval-delay 5
@@ -121,6 +127,34 @@ python main.py --build
 # Verbose output
 python main.py -v
 ```
+
+### Interactive Mode Commands
+
+When running in interactive mode, these commands are available:
+- `query` - Enter query mode to ask questions
+- `eval` - Run the evaluation suite
+- `stats` - Show system statistics (claim counts, vector store info)
+- `mcp` - Show MCP client status and test tools
+- `quit` - Exit the system
+
+### Data Reuse & Instant Startup
+
+The system persists data to disk and can reuse it on subsequent runs:
+
+**What gets persisted:**
+- `chroma_db/` - ChromaDB vector store (hierarchical + summary indexes)
+- `chroma_db/docstore.json` - Hierarchical node relationships for auto-merging
+- `claims_metadata.db` - SQLite structured metadata
+
+**Startup behavior:**
+1. First run → Full build (~2-3 minutes)
+2. Subsequent runs → Prompts: [y] rebuild, [N] reuse existing (instant)
+3. `--no-cleanup` → Automatically reuses existing data (no prompt)
+
+**When to rebuild:**
+- After changing PDF documents
+- After modifying chunking parameters
+- After changing summary generation logic
 
 ### Rebuilding Indexes
 
@@ -190,6 +224,53 @@ embed_model = OpenAIEmbedding(model="text-embedding-3-small")
 
 Currently operates in "direct" mode (using ChromaDB library directly), designed to support future MCP server mode.
 
+### Graders Module
+
+- `src/graders/__init__.py` - Package exports
+- `src/graders/code_graders.py` - Agent-specific deterministic graders
+- `src/graders/human_graders.py` - Human grading CLI + SQLite storage
+- `src/graders/combined_grader.py` - Orchestration + consensus scoring
+- `src/graders/report_generator.py` - HTML report generation
+
+**Three-Type Grading System** (based on Anthropic's "Demystifying Evals for AI Agents"):
+
+| Grader | Type | Purpose |
+|--------|------|---------|
+| Code-Based | Deterministic | Routing accuracy, claim retrieval, amounts, references |
+| Model-Based | LLM (Gemini) | Semantic correctness, relevancy scoring |
+| Human | Manual | Calibration, edge case validation |
+
+**Agent-Specific Grading Logic:**
+- `StructuredAgentGrader`: Claim retrieval, aggregation results, SQL patterns
+- `SummaryAgentGrader`: Claim coverage, response length, narrative elements
+- `NeedleAgentGrader`: Exact amounts, reference numbers, numeric precision
+- `RouterGrader`: Routing accuracy, signal matching
+
+**Human Grading CLI:**
+```bash
+# Grade responses interactively
+python -m src.graders.human_graders grade
+
+# Compare human vs model grades
+python -m src.graders.human_graders compare
+
+# View grading statistics
+python -m src.graders.human_graders stats
+
+# Export grades to JSON
+python -m src.graders.human_graders export
+```
+
+### Test Data Module
+
+- `src/test_data.py` - Canonical test query definitions (structured/summary/needle/router)
+  - Used by evaluation suite, graders, and tests
+  - `tests/test_queries.py` re-exports from here for pytest convenience
+
+### Utility Modules
+
+- `src/utils/nltk_silencer.py` - Silences NLTK download messages (must be imported before LlamaIndex)
+
 ### Utility Scripts
 
 - `scripts/generate_table_pdfs.py` - Generate synthetic insurance claim PDFs with embedded tables for testing table extraction
@@ -254,20 +335,36 @@ except Exception as e:
 
 ### Testing Changes
 
-Add new test cases to `tests/test_queries.py`:
+Test queries are organized by type in `tests/test_queries.py`:
 
 ```python
-TEST_CASES.append({
+# Add to the appropriate list based on expected routing:
+STRUCTURED_QUERIES = [...]  # SQL-based lookups, filters, aggregations (12 queries)
+SUMMARY_QUERIES = [...]     # High-level overviews, timelines (11 queries)
+NEEDLE_QUERIES = [...]      # Precise fact extraction (17 queries)
+ROUTER_QUERIES = [...]      # Router edge cases for routing accuracy (10 queries)
+
+# Agent query format:
+{
     "query": "Your new query",
-    "expected_agent": "needle",  # structured | summary | needle
     "ground_truth": "Expected answer",
-    "expected_chunks": ["CLM-2024-XXXXXX"]
-})
+    "expected_claims": ["CLM-2024-XXXXXX"]  # For recall scoring
+}
+
+# Router edge case format:
+{
+    "query": "Ambiguous or edge case query",
+    "expected_agent": "structured",  # or "summary" or "needle"
+    "routing_rationale": "Why this should route here"
+}
 ```
 
 Run evaluation:
 ```bash
-python main.py --eval
+python main.py --eval                    # Basic evaluation (model-based)
+python main.py --graders                 # Multi-grader with HTML report
+python main.py --graders --eval-subset 5 # First 5 with all graders
+python main.py --eval --eval-delay 5     # 5s delay (rate limit mitigation)
 ```
 
 ### Debugging Tips
@@ -361,3 +458,9 @@ CREATE TABLE claims (
 
 - `insurance_claims` - Leaf nodes (small chunks) for needle retrieval
 - Document metadata preserved in each node for filtering
+
+### Evaluation Output (`eval_runs/`)
+
+- `eval_YYYYMMDD_HHMMSS_report.html` - Beautiful HTML evaluation reports
+- `human_grades.db` - SQLite storage for human grades
+- `responses_to_grade.json` - Responses queued for manual grading
