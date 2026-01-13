@@ -28,7 +28,10 @@ Startup Behavior:
 import argparse
 import logging
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 
 from src.utils.nltk_silencer import silence_nltk_downloads
 
@@ -36,7 +39,6 @@ from src.utils.nltk_silencer import silence_nltk_downloads
 silence_nltk_downloads()
 
 from llama_index.llms.openai import OpenAI
-from llama_index.core import Settings
 
 # Setup logging
 logging.basicConfig(
@@ -446,26 +448,275 @@ def run_interactive(system: dict):
 def run_evaluation_mode(system: dict, subset: int = None, delay: float = 2.0):
     """
     Run the evaluation suite.
-    
+
     Args:
         system: System components dictionary
         subset: Number of test cases to run (None = all)
         delay: Delay between queries in seconds
     """
     from src.evaluation import run_evaluation, print_evaluation_summary, TEST_CASES, LLMJudge
-    
+
     test_cases = TEST_CASES[:subset] if subset else TEST_CASES
-    
+
     print("\n📊 Running evaluation suite...")
     print(f"   Test cases: {len(test_cases)}" + (f" (subset of {len(TEST_CASES)})" if subset else ""))
     print(f"   Delay between queries: {delay}s")
     print("   💡 Tip: Use --eval-delay 5 if you hit rate limits")
-    
+
     router = system['router']
     judge = LLMJudge()
-    
+
     results = run_evaluation(router, test_cases, judge, verbose=True, delay_between_queries=delay)
     print_evaluation_summary(results)
+
+
+# =============================================================================
+# MULTI-GRADER EVALUATION HELPERS
+# =============================================================================
+
+# Constants for display formatting
+DISPLAY_QUERY_LENGTH = 50
+ROUTER_SUBSET_DEFAULT = 3
+
+
+def _initialize_graders(include_human: bool) -> Tuple[Any, Any]:
+    """
+    Initialize the LLM judge and combined grader.
+
+    Args:
+        include_human: Whether to include human grades
+
+    Returns:
+        Tuple of (llm_judge, combined_grader)
+    """
+    from src.evaluation import LLMJudge
+    from src.graders.combined_grader import CombinedGrader
+
+    print("\n🔧 Initializing graders...")
+
+    llm_judge = None
+    try:
+        llm_judge = LLMJudge()
+        print("   ✅ Model grader (Gemini LLMJudge)")
+    except Exception as e:
+        print(f"   ⚠️  Model grader unavailable: {e}")
+
+    combined_grader = CombinedGrader(
+        llm_judge=llm_judge,
+        include_human=include_human
+    )
+    print("   ✅ Code grader (agent-specific)")
+
+    if include_human:
+        print("   ✅ Human grader (from SQLite)")
+    else:
+        print("   ⏭️  Human grader (skipped - use --include-human to enable)")
+
+    return llm_judge, combined_grader
+
+
+def _evaluate_agent_queries(
+    router,
+    queries: List[Dict],
+    grader,
+    eval_run_id: str,
+    delay: float,
+    total_queries: int
+) -> List[Any]:
+    """
+    Evaluate agent queries and collect results.
+
+    Args:
+        router: The router agent
+        queries: List of query dicts with expected values
+        grader: CombinedGrader instance
+        eval_run_id: Evaluation run identifier
+        delay: Delay between queries in seconds
+        total_queries: Total number of queries (for progress display)
+
+    Returns:
+        List of CombinedGradeResult objects
+    """
+    results = []
+
+    for i, test in enumerate(queries, 1):
+        print(f"\n[{i}/{total_queries}] {test['query'][:DISPLAY_QUERY_LENGTH]}...")
+
+        try:
+            response, metadata = router.query_with_metadata(test['query'])
+            actual_agent = metadata.get('routed_to', 'unknown')
+
+            result = grader.grade_single(
+                query=test['query'],
+                response=response,
+                expected={
+                    'expected_agent': test.get('expected_agent'),
+                    'expected_claims': test.get('expected_claims', []),
+                    'ground_truth': test.get('ground_truth', '')
+                },
+                actual_agent=actual_agent,
+                metadata=metadata,
+                eval_run_id=eval_run_id
+            )
+            results.append(result)
+
+            # Display progress
+            routing_status = "✅" if result.expected_agent == actual_agent else "❌"
+            code_score = result.code_grade.score if result.code_grade else 0
+            model_score = result.model_grade.correctness_score if result.model_grade else 0
+
+            print(f"   Routing: {routing_status} ({actual_agent})")
+            print(f"   Code: {code_score:.2f} | Model: {model_score:.2f} | Consensus: {result.consensus_score:.2f}")
+
+        except Exception as e:
+            logger.error(f"Error evaluating query: {e}")
+            print(f"   ❌ Error: {str(e)}")
+
+        if i < total_queries and delay > 0:
+            time.sleep(delay)
+
+    return results
+
+
+def _evaluate_router_queries(
+    router,
+    queries: List[Dict],
+    delay: float,
+    start_index: int,
+    total_queries: int
+) -> None:
+    """
+    Evaluate router edge case queries (routing accuracy only).
+
+    Args:
+        router: The router agent
+        queries: List of router edge case query dicts
+        delay: Delay between queries in seconds
+        start_index: Starting index for progress display
+        total_queries: Total number of queries (for progress display)
+    """
+    print(f"\n🔀 Evaluating router edge cases...")
+
+    for i, test in enumerate(queries, start_index):
+        print(f"\n[{i}/{total_queries}] ROUTER: {test['query'][:DISPLAY_QUERY_LENGTH]}...")
+
+        try:
+            response, metadata = router.query_with_metadata(test['query'])
+            actual_agent = metadata.get('routed_to', 'unknown')
+            expected_agent = test.get('expected_agent', '')
+
+            routing_correct = actual_agent == expected_agent
+            status = "✅" if routing_correct else "❌"
+            print(f"   Expected: {expected_agent} | Actual: {actual_agent} {status}")
+            print(f"   Rationale: {test.get('routing_rationale', 'N/A')}")
+
+        except Exception as e:
+            print(f"   ❌ Error: {str(e)}")
+
+        if i < total_queries and delay > 0:
+            time.sleep(delay)
+
+
+def _generate_evaluation_report(grader, results: List, eval_run_id: str, output_html: bool):
+    """
+    Generate and save the evaluation report.
+
+    Args:
+        grader: CombinedGrader instance
+        results: List of evaluation results
+        eval_run_id: Evaluation run identifier
+        output_html: Whether to generate HTML report
+    """
+    from src.graders.combined_grader import print_report_summary
+    from src.graders.report_generator import generate_html_report
+
+    print("\n" + "-" * 70)
+    print("📊 Generating evaluation report...")
+
+    report = grader.generate_report(results, eval_run_id)
+    print_report_summary(report)
+
+    if output_html:
+        output_dir = Path("eval_runs")
+        output_dir.mkdir(exist_ok=True)
+        html_path = output_dir / f"{eval_run_id}_report.html"
+
+        generate_html_report(report, html_path)
+        print(f"\n🌐 HTML report: {html_path}")
+        print(f"   Open with: open {html_path}")
+
+    return report
+
+
+def run_graders_evaluation(
+    system: dict,
+    subset: int = None,
+    delay: float = 2.0,
+    include_human: bool = False,
+    output_html: bool = True
+):
+    """
+    Run evaluation with all three grader types (code, model, human).
+
+    This implements the multi-grader evaluation based on Anthropic's
+    "Demystifying Evals for AI Agents" article.
+
+    Args:
+        system: System components dictionary
+        subset: Number of test cases to run (None = all)
+        delay: Delay between queries in seconds
+        include_human: Whether to include human grades (if available)
+        output_html: Whether to generate HTML report
+
+    Returns:
+        EvaluationReport with all results
+    """
+    from src.test_data import get_all_test_queries, get_router_test_queries
+
+    print("\n" + "=" * 70)
+    print("🎯 MULTI-GRADER EVALUATION")
+    print("   Based on Anthropic's 'Demystifying Evals for AI Agents'")
+    print("=" * 70)
+
+    # Get test queries
+    all_queries = get_all_test_queries()
+    router_queries = get_router_test_queries()
+
+    if subset:
+        all_queries = all_queries[:subset]
+        router_queries = router_queries[:min(ROUTER_SUBSET_DEFAULT, len(router_queries))]
+
+    total_queries = len(all_queries) + len(router_queries)
+
+    print(f"\n📋 Test Configuration:")
+    print(f"   Agent queries: {len(all_queries)}")
+    print(f"   Router edge cases: {len(router_queries)}")
+    print(f"   Total: {total_queries}")
+    print(f"   Delay between queries: {delay}s")
+
+    # Initialize graders
+    _, combined_grader = _initialize_graders(include_human)
+
+    # Generate run ID
+    eval_run_id = f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    print(f"\n🚀 Starting evaluation (run ID: {eval_run_id})...")
+    print("-" * 70)
+
+    # Evaluate agent queries
+    router = system['router']
+    results = _evaluate_agent_queries(
+        router, all_queries, combined_grader, eval_run_id, delay, total_queries
+    )
+
+    # Evaluate router edge cases
+    _evaluate_router_queries(
+        router, router_queries, delay,
+        start_index=len(all_queries) + 1,
+        total_queries=total_queries
+    )
+
+    # Generate report
+    return _generate_evaluation_report(combined_grader, results, eval_run_id, output_html)
 
 
 def show_mcp_status(system: dict):
@@ -555,11 +806,20 @@ def main():
         epilog="""
 Examples:
   python main.py                     # Interactive mode
-  python main.py --eval              # Run full evaluation
-  python main.py --eval --eval-subset 3   # Run only 3 test cases
+  python main.py --eval              # Run basic evaluation
+  python main.py --graders           # Run multi-grader evaluation with HTML report
+  python main.py --graders --eval-subset 5  # Run 5 test cases with all graders
   python main.py --eval --eval-delay 5    # 5 second delay between queries
   python main.py --build             # Build indexes and exit
   python main.py --no-cleanup        # Instant startup if data exists
+
+Multi-Grader Evaluation (--graders):
+  Based on Anthropic's "Demystifying Evals for AI Agents" article.
+  Runs three types of graders:
+  - Code-based: Deterministic checks (routing, amounts, references)
+  - Model-based: LLM evaluation using Gemini (unbiased provider)
+  - Human: Manual grades from SQLite (use --include-human)
+  Outputs a beautiful HTML report to eval_runs/
 
 Rate Limit Mitigation:
   If you hit OpenAI rate limits (429 errors), try:
@@ -593,7 +853,15 @@ Rate Limit Mitigation:
         '--no-cleanup', action='store_true',
         help='Skip cleanup prompt; if data exists, enables instant startup by reusing indexes'
     )
-    
+    parser.add_argument(
+        '--graders', action='store_true',
+        help='Run multi-grader evaluation (code + model + human) with HTML report'
+    )
+    parser.add_argument(
+        '--include-human', action='store_true',
+        help='Include human grades in evaluation (requires prior manual grading)'
+    )
+
     args = parser.parse_args()
     
     if args.verbose:
@@ -607,6 +875,16 @@ Rate Limit Mitigation:
             print("\n✅ Build complete. Exiting.")
             return 0
         
+        if args.graders:
+            run_graders_evaluation(
+                system,
+                subset=args.eval_subset,
+                delay=args.eval_delay,
+                include_human=args.include_human,
+                output_html=True
+            )
+            return 0
+
         if args.eval:
             run_evaluation_mode(system, subset=args.eval_subset, delay=args.eval_delay)
             return 0
