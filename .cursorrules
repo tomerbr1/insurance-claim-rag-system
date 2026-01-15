@@ -50,7 +50,8 @@ google-generativeai  # For Gemini evaluation
 
 ```
 insurance-claim-rag-system/
-├── main.py                    # Entry point & orchestrator
+├── main.py                    # Entry point, interactive CLI
+├── core.py                    # System orchestrator
 ├── requirements.txt           # Python dependencies
 ├── env.example               # Environment template (.env for actual keys)
 ├── claims_metadata.db        # SQLite metadata store
@@ -406,7 +407,8 @@ stats = await mcp_client.get_collection_stats("claims")
 ## Git Workflow
 
 The project tracks these key files:
-- `main.py` - Main orchestrator
+- `main.py` - Entry point, interactive CLI
+- `core.py` - System orchestrator
 - `src/` - All source modules
 - `tests/` - Test definitions
 - `requirements.txt` - Dependencies

@@ -128,14 +128,18 @@ python main.py --build
 python main.py -v
 ```
 
-### Interactive Mode Commands
+### Interactive CLI Menu
 
-When running in interactive mode, these commands are available:
-- `query` - Enter query mode to ask questions
-- `eval` - Run the evaluation suite
-- `stats` - Show system statistics (claim counts, vector store info)
-- `mcp` - Show MCP client status and test tools
-- `quit` - Exit the system
+The system uses a beautiful interactive CLI with ASCII art banner. When running `python main.py`, you get:
+
+**Menu Options:**
+- Query Mode - Interactive Q&A with routing info
+- Run Evaluation - Basic model-based evaluation
+- Multi-Grader Eval - All 3 grader types + HTML report
+- Human Grading - Launch manual grading interface
+- Show Statistics - View system metrics
+- MCP Status - Check MCP tools integration
+- Help - Usage guide with examples
 
 ### Data Reuse & Instant Startup
 
@@ -195,7 +199,8 @@ embed_model = OpenAIEmbedding(model="text-embedding-3-small")
 
 ### Core Modules
 
-- `main.py` - Entry point & orchestrator
+- `main.py` - Entry point, interactive CLI with ASCII banner (uses Rich/Questionary)
+- `core.py` - System orchestrator, initialization, evaluation runners
 - `src/config.py` - Configuration, model settings, API validation, MCP settings
 - `src/data_loader.py` - PDF loading + LLM metadata extraction + table extraction
 - `src/metadata_store.py` - SQLite for structured queries
@@ -335,13 +340,13 @@ except Exception as e:
 
 ### Testing Changes
 
-Test queries are organized by type in `tests/test_queries.py`:
+Test queries are organized by type in `src/test_data.py` (re-exported by `tests/test_queries.py`):
 
 ```python
 # Add to the appropriate list based on expected routing:
 STRUCTURED_QUERIES = [...]  # SQL-based lookups, filters, aggregations (12 queries)
 SUMMARY_QUERIES = [...]     # High-level overviews, timelines (11 queries)
-NEEDLE_QUERIES = [...]      # Precise fact extraction (17 queries)
+NEEDLE_QUERIES = [...]      # Precise fact extraction (25 queries)
 ROUTER_QUERIES = [...]      # Router edge cases for routing accuracy (10 queries)
 
 # Agent query format:

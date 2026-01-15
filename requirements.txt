@@ -32,6 +32,10 @@ python-dotenv==1.0.1
 # Async support
 aiohttp==3.9.5
 
+# Beautiful CLI
+rich>=13.0.0        # Rich text formatting and tables
+questionary>=2.0.0  # Interactive prompts
+
 # Optional: Streamlit UI (uncomment when needed)
 # streamlit==1.38.0
 

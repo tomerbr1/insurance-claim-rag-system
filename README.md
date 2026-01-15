@@ -600,7 +600,8 @@ We use **LLM-as-Judge** evaluation with a completely different provider (Gemini 
 
 ```
 insurance-claim-rag-system/
-├── main.py                    # Entry point & orchestrator
+├── main.py                    # Entry point, interactive CLI
+├── core.py                    # System orchestrator
 ├── requirements.txt           # Python dependencies
 ├── env.example               # Environment template
 ├── README.md                 # This file
