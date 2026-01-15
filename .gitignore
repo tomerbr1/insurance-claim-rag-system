@@ -36,5 +36,14 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Claude Code local files
+.claude/
+
+# Dev docs (local task tracking)
+dev/
+
+# Evaluation output
+eval_runs/
+
 # Note: Keep data/ in repo (contains PDFs), but ignore generated databases
 # Note: .env.example is tracked, .env is ignored
