@@ -508,6 +508,32 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .pass-badge.pass {{ background: rgba(34, 197, 94, 0.2); color: var(--success); }}
         .pass-badge.fail {{ background: rgba(239, 68, 68, 0.2); color: var(--danger); }}
 
+        /* Human grade cell */
+        .human-cell {{
+            vertical-align: top;
+        }}
+
+        .human-grade {{
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--human-color);
+            cursor: help;
+        }}
+
+        .human-grade.na {{
+            color: var(--text-muted);
+            cursor: default;
+        }}
+
+        .human-comment {{
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+            line-height: 1.3;
+            font-style: italic;
+            max-width: 150px;
+        }}
+
         /* Footer */
         footer {{
             text-align: center;
@@ -676,9 +702,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                     <tr>
                         <th>Query</th>
                         <th>Agent</th>
-                        <th>Routing</th>
                         <th>Code</th>
                         <th>Model</th>
+                        <th>Human</th>
                         <th>Consensus</th>
                         <th>Status</th>
                     </tr>
@@ -762,11 +788,6 @@ def _generate_result_row(result: Dict[str, Any]) -> str:
     """Generate HTML for a result table row."""
     query = result.get('query', '')[:50] + ('...' if len(result.get('query', '')) > 50 else '')
     actual_agent = result.get('actual_agent', 'unknown')
-    expected_agent = result.get('expected_agent', '')
-
-    routing_match = actual_agent == expected_agent if expected_agent else True
-    routing_badge = 'pass' if routing_match else 'fail'
-    routing_text = '' if routing_match else ''
 
     code_score = result.get('code_grade', {}).get('score', 0)
     model_score = result.get('model_grade', {}).get('correctness', 0) if result.get('model_grade') else 0
@@ -774,13 +795,27 @@ def _generate_result_row(result: Dict[str, Any]) -> str:
 
     passed = result.get('code_grade', {}).get('passed', False)
 
+    # Human grade with comments
+    human_grade = result.get('human_grade')
+    if human_grade:
+        human_level = human_grade.get('level', 0)
+        human_label = human_grade.get('label', '')
+        human_reasoning = human_grade.get('reasoning', '')
+        # Escape HTML in reasoning for tooltip
+        human_reasoning_escaped = human_reasoning.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+        human_cell = f'''<span class="human-grade" title="{human_reasoning_escaped}">{human_level}/5</span>'''
+        if human_reasoning:
+            human_cell += f'''<div class="human-comment">{human_reasoning[:60]}{'...' if len(human_reasoning) > 60 else ''}</div>'''
+    else:
+        human_cell = '<span class="human-grade na">—</span>'
+
     return f'''
     <tr>
         <td class="query-cell" title="{result.get('query', '')}">{query}</td>
         <td><span class="agent-badge {actual_agent}">{actual_agent}</span></td>
-        <td><span class="pass-badge {routing_badge}">{routing_text}</span></td>
         <td class="score-cell {_score_class(code_score)}">{code_score:.2f}</td>
         <td class="score-cell {_score_class(model_score)}">{model_score:.2f}</td>
+        <td class="human-cell">{human_cell}</td>
         <td class="score-cell {_score_class(consensus)}">{consensus:.2f}</td>
         <td><span class="pass-badge {'pass' if passed else 'fail'}">{'PASS' if passed else 'FAIL'}</span></td>
     </tr>
