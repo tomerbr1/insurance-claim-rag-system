@@ -642,15 +642,33 @@ def load_docstore(
 
                 for rel_type_str, related_value in node_data['relationships'].items():
                     # Convert string back to NodeRelationship enum
-                    try:
-                        rel_type = NodeRelationship(rel_type_str)
-                    except ValueError:
-                        # Try numeric conversion for older formats
+                    rel_type = None
+
+                    # Handle "NodeRelationship.SOURCE" format
+                    if rel_type_str.startswith('NodeRelationship.'):
+                        enum_name = rel_type_str.replace('NodeRelationship.', '')
+                        try:
+                            rel_type = NodeRelationship[enum_name]
+                        except KeyError:
+                            pass
+
+                    # Try direct value match (e.g., "source", "1")
+                    if rel_type is None:
+                        try:
+                            rel_type = NodeRelationship(rel_type_str)
+                        except ValueError:
+                            pass
+
+                    # Try numeric conversion for older formats
+                    if rel_type is None:
                         try:
                             rel_type = NodeRelationship(int(rel_type_str))
                         except (ValueError, TypeError):
-                            logger.warning(f"Unknown relationship type: {rel_type_str}")
-                            continue
+                            pass
+
+                    if rel_type is None:
+                        logger.warning(f"Unknown relationship type: {rel_type_str}")
+                        continue
 
                     # Handle both single ID and list of IDs
                     if isinstance(related_value, list):
