@@ -240,6 +240,47 @@ NEEDLE_QUERIES: List[Dict[str, Any]] = [
         "ground_truth": "VIN from CLM-2024-003458",
         "expected_claims": ["CLM-2024-003458"]
     },
+    # Additional needle queries for comprehensive coverage (8 new)
+    {
+        "query": "What is Dr. William Foster's NPI number in the knee surgery claim?",
+        "ground_truth": "1234567890",
+        "expected_claims": ["CLM-2024-002589"]
+    },
+    {
+        "query": "What was the pre-authorization number for David Chen's surgery?",
+        "ground_truth": "PA-2024-88472",
+        "expected_claims": ["CLM-2024-002589"]
+    },
+    {
+        "query": "What was the adjuster ID for the storm damage claim?",
+        "ground_truth": "ADJ-5587 (Rebecca Martinez)",
+        "expected_claims": ["CLM-2024-006001"]
+    },
+    {
+        "query": "What check number was used to settle the Thompson storm claim?",
+        "ground_truth": "Check #48827",
+        "expected_claims": ["CLM-2024-006001"]
+    },
+    {
+        "query": "What is the CHP report number for the Highway 101 collision?",
+        "ground_truth": "2024-CA-87234",
+        "expected_claims": ["CLM-2024-006002"]
+    },
+    {
+        "query": "What is the VIN of Daniel Harrison's BMW?",
+        "ground_truth": "5UXCR6C05N9K78234",
+        "expected_claims": ["CLM-2024-006002"]
+    },
+    {
+        "query": "What is the OSHA incident report number for the forklift accident?",
+        "ground_truth": "OSHA-2024-CA-44821",
+        "expected_claims": ["CLM-2024-006003"]
+    },
+    {
+        "query": "What is the weekly TTD rate for Christopher Martinez's workers comp claim?",
+        "ground_truth": "$920.00/week",
+        "expected_claims": ["CLM-2024-006003"]
+    },
 ]
 
 
