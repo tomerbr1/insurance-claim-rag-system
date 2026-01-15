@@ -166,18 +166,17 @@ def run_graders_mode(system: dict):
     from core import run_graders_evaluation
 
     console.print("\n[bold cyan]Multi-Grader Evaluation[/bold cyan]")
-    console.print("[dim]Based on Anthropic's 'Demystifying Evals for AI Agents'[/dim]\n")
+    console.print("[italic bright_white]Based on Anthropic's 'Demystifying Evals for AI Agents'[/italic bright_white]\n")
 
-    # Ask for options
+    # Get query counts for display
+    from src.test_data import get_query_stats
+    stats = get_query_stats()
+
+    # Ask for options - per-agent subset ensures all agents are tested
+    console.print(f"[dim]Query distribution: {stats['structured']} structured, {stats['summary']} summary, {stats['needle']} needle, {stats['router']} router[/dim]")
     subset = questionary.text(
-        "Number of queries (leave empty for all):",
+        f"Queries per agent type (default: all):",
         default="",
-        style=custom_style
-    ).ask()
-
-    include_human = questionary.confirm(
-        "Include human grades (if available)?",
-        default=False,
         style=custom_style
     ).ask()
 
@@ -187,7 +186,6 @@ def run_graders_mode(system: dict):
     run_graders_evaluation(
         system,
         subset=subset_val,
-        include_human=include_human,
         output_html=True
     )
 

@@ -1023,7 +1023,7 @@ def run_graders_evaluation(
 
     Args:
         system: System components dictionary
-        subset: Number of test cases to run (None = all)
+        subset: Number of queries PER AGENT TYPE (None = all). Ensures all agents are tested.
         delay: Delay between queries in seconds
         include_human: Whether to include human grades (if available)
         output_html: Whether to generate HTML report
@@ -1054,8 +1054,13 @@ def run_graders_evaluation(
     router_queries = get_router_test_queries()
 
     if subset:
-        all_queries = all_queries[:subset]
-        router_queries = router_queries[:min(ROUTER_SUBSET_DEFAULT, len(router_queries))]
+        # Apply subset per agent type to ensure all agents are tested
+        filtered_queries = []
+        for agent_type in ['structured', 'summary', 'needle']:
+            agent_queries = [q for q in all_queries if q.get('expected_agent') == agent_type]
+            filtered_queries.extend(agent_queries[:subset])
+        all_queries = filtered_queries
+        router_queries = router_queries[:subset]
 
     total_queries = len(all_queries) + len(router_queries)
 
