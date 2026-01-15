@@ -88,8 +88,9 @@ def main_menu():
     choices = [
         questionary.Choice("  Query Mode         Ask questions about claims", value="query"),
         questionary.Choice("  Run Evaluation     Basic model-based evaluation", value="eval"),
-        questionary.Choice("  Multi-Grader Eval  All graders + HTML report", value="graders"),
+        questionary.Choice("  Multi-Grader Eval  Run eval (code + model graders)", value="graders"),
         questionary.Choice("  Human Grading      Manually grade responses", value="human"),
+        questionary.Choice("  Generate Report    Create report from saved data", value="report"),
         questionary.Choice("  Show Statistics    View system metrics", value="stats"),
         questionary.Choice("  MCP Status         Check MCP integration", value="mcp"),
         questionary.Choice("  Help               Usage guide", value="help"),
@@ -213,6 +214,18 @@ def run_human_grading():
     console.print(f"\n[green]Total graded: {graded}[/green]\n")
 
 
+def run_generate_report():
+    """Generate report from saved evaluation data."""
+    from core import generate_report_from_saved
+
+    console.print("\n[bold cyan]Generating Report from Saved Data[/bold cyan]")
+    console.print("[dim]Uses responses_to_grade.json + human_grades.db[/dim]\n")
+
+    report = generate_report_from_saved(output_html=True)
+    if report:
+        console.print(f"\n[green]✓ Report generated successfully![/green]\n")
+
+
 def show_statistics(system: dict):
     """Display detailed statistics."""
     from core import show_statistics as main_show_statistics
@@ -305,6 +318,8 @@ def run_interactive():
                 run_graders_mode(system)
             elif choice == "human":
                 run_human_grading()
+            elif choice == "report":
+                run_generate_report()
             elif choice == "stats":
                 show_statistics(system)
             elif choice == "mcp":
@@ -333,6 +348,7 @@ Examples:
   python main.py --query      # Quick query mode
   python main.py --eval       # Run evaluation
   python main.py --graders    # Multi-grader evaluation
+  python main.py --report      # Generate report from saved data
         """
     )
 
@@ -342,10 +358,19 @@ Examples:
                         help='Run basic evaluation')
     parser.add_argument('--graders', '-g', action='store_true',
                         help='Run multi-grader evaluation')
+    parser.add_argument('--report', '-r', action='store_true',
+                        help='Generate report from saved eval data (includes human grades)')
     parser.add_argument('--subset', '-s', type=int, default=None,
                         help='Limit number of queries for evaluation')
 
     args = parser.parse_args()
+
+    # Generate report from saved data (doesn't need system initialization)
+    if args.report:
+        show_banner()
+        from core import generate_report_from_saved
+        generate_report_from_saved(output_html=True)
+        return
 
     # Non-interactive modes
     if args.eval or args.graders:

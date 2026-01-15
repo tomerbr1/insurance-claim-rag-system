@@ -892,6 +892,122 @@ def _export_responses_for_grading(results: List, eval_run_id: str):
         traceback.print_exc()
 
 
+def generate_report_from_saved(output_html: bool = True):
+    """
+    Generate evaluation report from saved data (snapshot-based).
+
+    Uses:
+    - responses_to_grade.json (query, response, agents)
+    - model_grades table (LLM evaluation scores)
+    - human_grades table (manual grades)
+
+    Re-runs code graders (deterministic) but does NOT re-query agents.
+    This ensures human grades match the exact responses they were graded on.
+
+    Returns:
+        EvaluationReport or None if no saved data found.
+    """
+    from src.graders.combined_grader import CombinedGrader, CombinedGradeResult, ModelGradeResult
+    from src.graders.human_graders import HumanGraderStore
+    from src.graders.code_graders import InsuranceClaimsCodeGraders
+    from src.graders.report_generator import generate_html_report
+    from src.graders.combined_grader import print_report_summary
+
+    responses_path = Path("eval_runs/responses_to_grade.json")
+    if not responses_path.exists():
+        print("❌ No saved responses found. Run evaluation first.")
+        print("   Use: python main.py --graders")
+        return None
+
+    with open(responses_path) as f:
+        responses = json.load(f)
+
+    if not responses:
+        print("❌ No responses in saved file.")
+        return None
+
+    eval_run_id = responses[0].get('eval_run_id', 'unknown')
+    print(f"\n📂 Loading {len(responses)} responses from {eval_run_id}")
+
+    # Initialize graders
+    code_graders = InsuranceClaimsCodeGraders()
+    human_store = HumanGraderStore()
+    combined_grader = CombinedGrader(llm_judge=None, include_human=True)
+
+    results = []
+    human_applied = 0
+    model_found = 0
+
+    for resp in responses:
+        # Build expected dict for code grader
+        expected = {
+            'expected_agent': resp['expected_agent'],
+            'ground_truth': resp['ground_truth'],
+            'expected_claims': []  # Could extract from ground_truth if needed
+        }
+
+        # 1. Code grading (re-run, deterministic)
+        code_grade = code_graders.grade(
+            resp['query'], resp['response'], expected, resp['actual_agent'], {}
+        )
+
+        # 2. Model grading (lookup from DB)
+        model_data = human_store.get_model_grade(resp['query'])
+        model_grade = None
+        if model_data:
+            model_grade = ModelGradeResult(
+                correctness_score=model_data['correctness'],
+                correctness_reasoning="(from saved evaluation)",
+                relevancy_score=model_data['relevancy'],
+                relevancy_reasoning="(from saved evaluation)",
+                recall_score=model_data['recall'],
+                recall_reasoning="(from saved evaluation)"
+            )
+            model_found += 1
+
+        # 3. Human grading (lookup from DB)
+        human_grade = human_store.get_human_grade(resp['query'])
+        if human_grade:
+            human_applied += 1
+
+        # Create result
+        result = CombinedGradeResult(
+            query=resp['query'],
+            response=resp['response'],
+            expected_agent=resp['expected_agent'],
+            actual_agent=resp['actual_agent'],
+            ground_truth=resp['ground_truth'],
+            code_grade=code_grade,
+            model_grade=model_grade,
+            human_grade=human_grade,
+            eval_run_id=eval_run_id
+        )
+
+        # Calculate consensus using CombinedGrader's method
+        result.consensus_score, result.grader_agreement = combined_grader._calculate_consensus(result)
+        results.append(result)
+
+    print(f"   ✅ Code grades: {len(results)} (re-calculated)")
+    print(f"   ✅ Model grades: {model_found} (from DB)")
+    print(f"   ✅ Human grades: {human_applied} (from DB)")
+
+    # Generate report
+    print("\n📊 Generating evaluation report...")
+    report = combined_grader.generate_report(results, eval_run_id)
+    print_report_summary(report)
+
+    if output_html:
+        output_dir = Path("eval_runs")
+        output_dir.mkdir(exist_ok=True)
+        html_path = output_dir / f"{eval_run_id}_with_human_report.html"
+
+        generate_html_report(report, html_path)
+        print(f"\n🌐 HTML report: {html_path}")
+        print(f"   Open with: open {html_path}")
+
+    return report
+
+
 def run_graders_evaluation(
     system: dict,
     subset: int = None,
@@ -921,6 +1037,17 @@ def run_graders_evaluation(
     print("🎯 MULTI-GRADER EVALUATION")
     print("   Based on Anthropic's 'Demystifying Evals for AI Agents'")
     print("=" * 70)
+
+    # Clear previous grades (new eval run = fresh start)
+    from src.graders.human_graders import HumanGraderStore
+    grade_store = HumanGraderStore()
+    human_count, model_count = grade_store.get_grade_counts()
+    if human_count > 0 or model_count > 0:
+        print(f"\n🗑️  Clearing previous grades (new eval run):")
+        print(f"   Human grades: {human_count}")
+        print(f"   Model grades: {model_count}")
+        grade_store.clear_all_grades()
+        print("   ✅ Cleared")
 
     # Get test queries
     all_queries = get_all_test_queries()

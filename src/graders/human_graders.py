@@ -180,6 +180,31 @@ class HumanGraderStore:
             ))
             conn.commit()
 
+    def get_model_grade(self, query: str) -> Optional[Dict[str, float]]:
+        """
+        Get model grade scores for a query.
+
+        Returns:
+            Dict with 'correctness', 'relevancy', 'recall' scores, or None if not found.
+        """
+        query_hash = self.hash_query(query)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT correctness_score, relevancy_score, recall_score
+                FROM model_grades
+                WHERE query_hash = ?
+            """, (query_hash,))
+            row = cursor.fetchone()
+
+            if row:
+                return {
+                    'correctness': row['correctness_score'],
+                    'relevancy': row['relevancy_score'],
+                    'recall': row['recall_score']
+                }
+        return None
+
     def get_human_grade(self, query: str, grader_id: str = "default") -> Optional[HumanGrade]:
         """Get a human grade for a query."""
         query_hash = self.hash_query(query)
@@ -316,6 +341,40 @@ class HumanGraderStore:
             json.dump(data, f, indent=2)
 
         return len(data)
+
+    def clear_all_grades(self) -> Tuple[int, int]:
+        """
+        Clear all human grades and model grades from the database.
+
+        Called at the start of a new evaluation run to ensure
+        grades match the current responses.
+
+        Returns:
+            Tuple of (human_grades_deleted, model_grades_deleted)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM human_grades")
+            human_count = cursor.fetchone()[0]
+
+            cursor = conn.execute("SELECT COUNT(*) FROM model_grades")
+            model_count = cursor.fetchone()[0]
+
+            conn.execute("DELETE FROM human_grades")
+            conn.execute("DELETE FROM model_grades")
+            conn.commit()
+
+        return human_count, model_count
+
+    def get_grade_counts(self) -> Tuple[int, int]:
+        """Get count of existing grades."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM human_grades")
+            human_count = cursor.fetchone()[0]
+
+            cursor = conn.execute("SELECT COUNT(*) FROM model_grades")
+            model_count = cursor.fetchone()[0]
+
+        return human_count, model_count
 
 
 class HumanGraderCLI:
