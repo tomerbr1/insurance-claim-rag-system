@@ -21,6 +21,7 @@ Note: Use main.py as the entry point, not this file directly.
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime
@@ -50,6 +51,95 @@ for chroma_logger_name in [
     chroma_logger.propagate = False
 
 
+def display_data_summary():
+    """
+    Display a summary of existing data including timestamps and statistics.
+
+    Called during instant startup to show users what data is loaded.
+    """
+    from src.config import CHROMA_DIR, METADATA_DB
+    from src.cleanup import check_existing_data
+    from src.metadata_store import MetadataStore
+
+    # Get file modification times
+    def get_file_mtime(path: Path) -> str:
+        """Get human-readable modification time of a file."""
+        if path.exists():
+            mtime = os.path.getmtime(path)
+            return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+        return "N/A"
+
+    # Get data info from cleanup module
+    data_info = check_existing_data()
+
+    # Get timestamps
+    metadata_mtime = get_file_mtime(METADATA_DB)
+    chroma_db_path = CHROMA_DIR / "chroma.sqlite3"
+    chroma_mtime = get_file_mtime(chroma_db_path)
+    docstore_path = CHROMA_DIR / "docstore.json"
+    docstore_mtime = get_file_mtime(docstore_path)
+
+    # Use the most recent timestamp as "data created" time
+    mtimes = [metadata_mtime, chroma_mtime, docstore_mtime]
+    valid_mtimes = [m for m in mtimes if m != "N/A"]
+    data_created = max(valid_mtimes) if valid_mtimes else "N/A"
+
+    # Get statistics from metadata store
+    stats = None
+    try:
+        metadata_store = MetadataStore()
+        stats = metadata_store.get_statistics()
+        metadata_store.close()
+    except Exception as e:
+        logger.warning(f"Could not load statistics: {e}")
+
+    # Display formatted output
+    width = 70
+    print("\n" + "=" * width)
+    print("  EXISTING DATA SUMMARY")
+    print("=" * width)
+
+    # Timestamp section
+    print(f"\n  Data Created: {data_created}")
+
+    # Contents section
+    print("\n  Contents:")
+
+    # Claims info
+    if stats:
+        print(f"     Claims: {stats['total_claims']} total")
+
+        # By type
+        if stats.get('by_type'):
+            for claim_type, count in sorted(stats['by_type'].items()):
+                print(f"       - {claim_type}: {count}")
+
+        # By status
+        if stats.get('by_status'):
+            status_parts = [f"{status} ({count})" for status, count in sorted(stats['by_status'].items())]
+            print(f"     Status: {', '.join(status_parts)}")
+
+        # Financial summary
+        if stats.get('value_stats') and stats['value_stats'].get('total'):
+            total_val = stats['value_stats']['total']
+            min_val = stats['value_stats'].get('min', 0)
+            max_val = stats['value_stats'].get('max', 0)
+            print(f"     Total Value: ${total_val:,.2f}")
+            print(f"     Range: ${min_val:,.2f} - ${max_val:,.2f}")
+    else:
+        print(f"     Claims: {data_info.get('metadata_count', 0)} total")
+
+    # Vector store info
+    print(f"     Vector Store: {data_info.get('chromadb_count', 0)} chunks indexed")
+    print(f"     Summary Nodes: {data_info.get('summary_count', 0)} summaries")
+
+    # Docstore info
+    docstore_nodes = data_info.get('details', {}).get('docstore_nodes', 0)
+    print(f"     Docstore: {docstore_nodes} hierarchical nodes")
+
+    print("\n" + "=" * width)
+
+
 def load_existing_system():
     """
     Load the RAG system from existing persisted data.
@@ -72,7 +162,10 @@ def load_existing_system():
     print("\n" + "=" * 70)
     print("⚡ LOADING EXISTING DATA - INSTANT STARTUP")
     print("=" * 70)
-    
+
+    # Display data summary
+    display_data_summary()
+
     # Validate configuration
     print("\n🔧 Validating configuration...")
     validate_config()
