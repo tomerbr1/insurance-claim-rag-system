@@ -28,7 +28,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+from rich import box
+
 from src.utils.nltk_silencer import silence_nltk_downloads
+
+# Initialize Rich console for colored output
+console = Console()
 
 # Silence NLTK download chatter before LlamaIndex initializes tokenizers.
 silence_nltk_downloads()
@@ -51,11 +60,63 @@ for chroma_logger_name in [
     chroma_logger.propagate = False
 
 
+def _count_documents_with_tables(chroma_dir: Path) -> tuple:
+    """
+    Count documents with tables from the docstore.
+
+    Returns:
+        Tuple of (docs_with_tables, total_docs, total_tables)
+    """
+    docstore_path = chroma_dir / "docstore.json"
+    if not docstore_path.exists():
+        return 0, 0, 0
+
+    try:
+        with open(docstore_path, 'r') as f:
+            docstore_data = json.load(f)
+
+        nodes = docstore_data.get('nodes', {})
+
+        # Track unique documents (by source_file) with tables
+        docs_seen = set()
+        docs_with_tables = set()
+        total_tables = 0
+
+        for node_id, node_data in nodes.items():
+            metadata = node_data.get('metadata', {})
+            source_file = metadata.get('source_file') or metadata.get('file_name')
+
+            if source_file:
+                docs_seen.add(source_file)
+                if metadata.get('has_tables'):
+                    docs_with_tables.add(source_file)
+                    # Count tables only once per document (use table_count from first occurrence)
+                    if source_file not in docs_with_tables or total_tables == 0:
+                        total_tables += metadata.get('table_count', 0)
+
+        # Recalculate total tables correctly
+        total_tables = 0
+        for source_file in docs_with_tables:
+            # Find first node with this source file to get table count
+            for node_data in nodes.values():
+                metadata = node_data.get('metadata', {})
+                node_source = metadata.get('source_file') or metadata.get('file_name')
+                if node_source == source_file and metadata.get('has_tables'):
+                    total_tables += metadata.get('table_count', 0)
+                    break
+
+        return len(docs_with_tables), len(docs_seen), total_tables
+    except Exception as e:
+        logger.warning(f"Error counting documents with tables: {e}")
+        return 0, 0, 0
+
+
 def display_data_summary():
     """
     Display a summary of existing data including timestamps and statistics.
 
     Called during instant startup to show users what data is loaded.
+    Uses Rich for colorful, user-friendly output.
     """
     from src.config import CHROMA_DIR, METADATA_DB
     from src.cleanup import check_existing_data
@@ -93,51 +154,96 @@ def display_data_summary():
     except Exception as e:
         logger.warning(f"Could not load statistics: {e}")
 
-    # Display formatted output
-    width = 70
-    print("\n" + "=" * width)
-    print("  EXISTING DATA SUMMARY")
-    print("=" * width)
+    # Get documents with tables count
+    docs_with_tables, total_docs, total_tables = _count_documents_with_tables(CHROMA_DIR)
 
-    # Timestamp section
-    print(f"\n  Data Created: {data_created}")
+    # Build the display using Rich
+    text = Text()
 
-    # Contents section
-    print("\n  Contents:")
+    # Header
+    text.append("\n")
 
-    # Claims info
+    # Timestamp
+    text.append("🕐 ", style="bold")
+    text.append("Data Created: ", style="white")
+    text.append(f"{data_created}\n\n", style="cyan")
+
+    # Claims section
+    text.append("📋 ", style="bold")
+    text.append("CLAIMS\n", style="bold yellow")
+
     if stats:
-        print(f"     Claims: {stats['total_claims']} total")
+        text.append(f"   Total: ", style="white")
+        text.append(f"{stats['total_claims']} documents\n", style="bold green")
 
-        # By type
-        if stats.get('by_type'):
-            for claim_type, count in sorted(stats['by_type'].items()):
-                print(f"       - {claim_type}: {count}")
-
-        # By status
+        # Status with colored badges
         if stats.get('by_status'):
-            status_parts = [f"{status} ({count})" for status, count in sorted(stats['by_status'].items())]
-            print(f"     Status: {', '.join(status_parts)}")
+            text.append("   Status: ", style="white")
+            status_colors = {'SETTLED': 'green', 'OPEN': 'yellow', 'CLOSED': 'red'}
+            first = True
+            for status, count in sorted(stats['by_status'].items()):
+                if not first:
+                    text.append(" • ", style="white")
+                first = False
+                color = status_colors.get(status, 'white')
+                text.append(f"{status}", style=f"bold {color}")
+                text.append(f" ({count})", style="white")
+            text.append("\n")
 
         # Financial summary
         if stats.get('value_stats') and stats['value_stats'].get('total'):
             total_val = stats['value_stats']['total']
             min_val = stats['value_stats'].get('min', 0)
             max_val = stats['value_stats'].get('max', 0)
-            print(f"     Total Value: ${total_val:,.2f}")
-            print(f"     Range: ${min_val:,.2f} - ${max_val:,.2f}")
+            text.append("\n💰 ", style="bold")
+            text.append("FINANCIAL\n", style="bold yellow")
+            text.append("   Total Value: ", style="white")
+            text.append(f"${total_val:,.2f}\n", style="bold green")
+            text.append("   Range: ", style="white")
+            text.append(f"${min_val:,.2f}", style="cyan")
+            text.append(" → ", style="white")
+            text.append(f"${max_val:,.2f}\n", style="cyan")
     else:
-        print(f"     Claims: {data_info.get('metadata_count', 0)} total")
+        text.append(f"   Total: {data_info.get('metadata_count', 0)} documents\n", style="white")
 
-    # Vector store info
-    print(f"     Vector Store: {data_info.get('chromadb_count', 0)} chunks indexed")
-    print(f"     Summary Nodes: {data_info.get('summary_count', 0)} summaries")
+    # Index section
+    text.append("\n📁 ", style="bold")
+    text.append("INDEXES\n", style="bold yellow")
 
-    # Docstore info
+    chromadb_count = data_info.get('chromadb_count', 0)
+    summary_count = data_info.get('summary_count', 0)
     docstore_nodes = data_info.get('details', {}).get('docstore_nodes', 0)
-    print(f"     Docstore: {docstore_nodes} hierarchical nodes")
 
-    print("\n" + "=" * width)
+    text.append("   Vector Store: ", style="white")
+    text.append(f"{chromadb_count:,} chunks\n", style="cyan")
+    text.append("   Summary Nodes: ", style="white")
+    text.append(f"{summary_count:,} summaries\n", style="cyan")
+    text.append("   Docstore: ", style="white")
+    text.append(f"{docstore_nodes:,} hierarchical nodes\n", style="cyan")
+
+    # Tables section
+    if total_docs > 0:
+        text.append("\n📊 ", style="bold")
+        text.append("TABLES\n", style="bold yellow")
+        text.append("   Documents with tables: ", style="white")
+        if docs_with_tables > 0:
+            text.append(f"{docs_with_tables}/{total_docs}", style="bold magenta")
+            text.append(f" ({total_tables} tables extracted)\n", style="white")
+        else:
+            text.append(f"0/{total_docs}\n", style="white")
+
+    # Create the panel
+    panel = Panel(
+        text,
+        title="[bold cyan]📦 EXISTING DATA SUMMARY[/bold cyan]",
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(0, 2),
+    )
+
+    # Print newline first to ensure panel starts on a clean line
+    console.print()
+    console.print(panel)
 
 
 def load_existing_system():
