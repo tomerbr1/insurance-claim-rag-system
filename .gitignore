@@ -14,9 +14,6 @@ __pycache__/
 # Vector database
 chroma_db/
 
-# Documents
-docs/
-
 # SQLite database
 *.db
 
