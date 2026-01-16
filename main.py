@@ -93,6 +93,7 @@ def main_menu():
         questionary.Choice("  Generate Report    Create report from saved data", value="report"),
         questionary.Choice("  Show Statistics    View system metrics", value="stats"),
         questionary.Choice("  MCP Status         Check MCP integration", value="mcp"),
+        questionary.Choice("  Rebuild Index      Rebuild all indexes from scratch", value="rebuild"),
         questionary.Choice("  Help               Usage guide", value="help"),
         questionary.Choice("  Exit", value="exit"),
     ]
@@ -238,6 +239,58 @@ def show_mcp_status(system: dict):
     main_show_mcp(system)
 
 
+def rebuild_index(return_system: bool = False):
+    """
+    Rebuild all indexes from scratch with confirmation.
+
+    Args:
+        return_system: If True, return the new system dict after rebuild
+
+    Returns:
+        New system dict if return_system=True, else None
+    """
+    from src.cleanup import cleanup_all
+    from core import build_system
+
+    console.print("\n[bold yellow]⚠️  Rebuild Index[/bold yellow]")
+    console.print("[dim]This will delete all existing indexes and rebuild from scratch.[/dim]")
+    console.print("[dim]This operation may take several minutes.[/dim]\n")
+
+    # Show what will be deleted
+    console.print("[bold]The following will be deleted:[/bold]")
+    console.print("  • ChromaDB vector store (chroma_db/)")
+    console.print("  • SQLite metadata store (claims_metadata.db)")
+    console.print("  • Docstore with hierarchical relationships")
+    console.print("  • Summary index nodes\n")
+
+    # Confirm with user
+    confirm = questionary.confirm(
+        "Are you sure you want to rebuild all indexes?",
+        default=False,
+        style=custom_style
+    ).ask()
+
+    if not confirm:
+        console.print("[dim]Rebuild cancelled.[/dim]\n")
+        return None
+
+    console.print()
+
+    # Clean up existing data
+    console.print("[cyan]Cleaning up existing data...[/cyan]")
+    cleanup_all(verbose=True, interactive=False)
+
+    # Rebuild
+    console.print("\n[cyan]Rebuilding indexes...[/cyan]\n")
+    new_system = build_system(skip_cleanup=True)
+
+    console.print("\n[green]✓ Index rebuild complete![/green]\n")
+
+    if return_system:
+        return new_system
+    return None
+
+
 def show_help():
     """Display help and usage guide."""
     help_table = Table(title="Usage Guide", box=box.ROUNDED, border_style="cyan")
@@ -322,6 +375,11 @@ def run_interactive():
                 show_statistics(system)
             elif choice == "mcp":
                 show_mcp_status(system)
+            elif choice == "rebuild":
+                new_system = rebuild_index(return_system=True)
+                if new_system:
+                    system = new_system
+                    show_status(system)
             elif choice == "help":
                 show_help()
 
@@ -346,7 +404,8 @@ Examples:
   python main.py --query      # Quick query mode
   python main.py --eval       # Run evaluation
   python main.py --graders    # Multi-grader evaluation
-  python main.py --report      # Generate report from saved data
+  python main.py --report     # Generate report from saved data
+  python main.py --rebuild    # Rebuild all indexes from scratch
         """
     )
 
@@ -358,6 +417,8 @@ Examples:
                         help='Run multi-grader evaluation')
     parser.add_argument('--report', '-r', action='store_true',
                         help='Generate report from saved eval data (includes human grades)')
+    parser.add_argument('--rebuild', action='store_true',
+                        help='Rebuild all indexes from scratch (will prompt for confirmation)')
     parser.add_argument('--subset', '-s', type=int, default=None,
                         help='Limit number of queries for evaluation')
 
@@ -368,6 +429,12 @@ Examples:
         show_banner()
         from core import generate_report_from_saved
         generate_report_from_saved(output_html=True)
+        return
+
+    # Rebuild index mode
+    if args.rebuild:
+        show_banner()
+        rebuild_index(return_system=False)
         return
 
     # Non-interactive modes
