@@ -239,12 +239,13 @@ def show_mcp_status(system: dict):
     main_show_mcp(system)
 
 
-def rebuild_index(return_system: bool = False):
+def rebuild_index(return_system: bool = False, force: bool = False):
     """
     Rebuild all indexes from scratch with confirmation.
 
     Args:
         return_system: If True, return the new system dict after rebuild
+        force: If True, skip confirmation prompt (use with CLI --yes flag)
 
     Returns:
         New system dict if return_system=True, else None
@@ -263,16 +264,18 @@ def rebuild_index(return_system: bool = False):
     console.print("  • Docstore with hierarchical relationships")
     console.print("  • Summary index nodes\n")
 
-    # Confirm with user
-    confirm = questionary.confirm(
-        "Are you sure you want to rebuild all indexes?",
-        default=False,
-        style=custom_style
-    ).ask()
+    # Skip confirmation if force=True (--yes flag)
+    if not force:
+        # Confirm with user
+        confirm = questionary.confirm(
+            "Are you sure you want to rebuild all indexes?",
+            default=False,
+            style=custom_style
+        ).ask()
 
-    if not confirm:
-        console.print("[dim]Rebuild cancelled.[/dim]\n")
-        return None
+        if not confirm:
+            console.print("[dim]Rebuild cancelled.[/dim]\n")
+            return None
 
     console.print()
 
@@ -419,6 +422,8 @@ Examples:
                         help='Generate report from saved eval data (includes human grades)')
     parser.add_argument('--rebuild', action='store_true',
                         help='Rebuild all indexes from scratch (will prompt for confirmation)')
+    parser.add_argument('--yes', '-y', action='store_true',
+                        help='Skip confirmation prompts (use with --rebuild)')
     parser.add_argument('--subset', '-s', type=int, default=None,
                         help='Limit number of queries for evaluation')
 
@@ -434,7 +439,7 @@ Examples:
     # Rebuild index mode
     if args.rebuild:
         show_banner()
-        rebuild_index(return_system=False)
+        rebuild_index(return_system=False, force=args.yes)
         return
 
     # Non-interactive modes
