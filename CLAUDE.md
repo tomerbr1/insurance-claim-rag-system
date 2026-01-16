@@ -441,6 +441,17 @@ TABLE_MIN_COLS=2               # Minimum columns for a valid table
 - Hard-code API keys in source files
 - Use NLTK without silencing download messages (use `src/utils/nltk_silencer.py`)
 
+### NEVER Rebuild Data Without Permission
+
+**CRITICAL**: NEVER run `--rebuild`, `--build`, or any command that rebuilds indexes/data without explicit user approval.
+
+Before rebuilding:
+1. **Ask the user**: "Do you want me to rebuild the index? This will delete existing data and take ~2-3 minutes."
+2. **Wait for explicit "yes"** before proceeding
+3. **Do not assume** that code changes require a rebuild - let the user decide
+
+Rebuilding is expensive (~$0.10-0.20) and time-consuming. Always prefer `--no-cleanup` for testing unless the user explicitly requests a rebuild.
+
 ## Database Schema
 
 ### SQLite Metadata Store (`claims_metadata.db`)
