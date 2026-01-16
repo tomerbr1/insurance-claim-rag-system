@@ -186,8 +186,8 @@ NEEDLE_QUERIES: List[Dict[str, Any]] = [
         "expected_claims": ["CLM-2024-005234"]
     },
     {
-        "query": "What was Officer Thompson's badge number?",
-        "ground_truth": "Badge #4421",
+        "query": "What was Officer Daniel Thompson's badge number from the police report?",
+        "ground_truth": "Badge #4421 (Police Report #SPD-2024-08834)",
         "expected_claims": ["CLM-2024-001847"]
     },
     {
@@ -231,7 +231,7 @@ NEEDLE_QUERIES: List[Dict[str, Any]] = [
         "expected_claims": ["CLM-2024-002156"]
     },
     {
-        "query": "What date was the workers comp injury reported?",
+        "query": "What date was James Rodriguez's workers comp injury reported?",
         "ground_truth": "August 5, 2024 (same day as injury occurred)",
         "expected_claims": ["CLM-2024-004127"]
     },
