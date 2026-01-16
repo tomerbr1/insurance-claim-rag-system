@@ -5,27 +5,34 @@ This module implements:
 1. Two-level hierarchical chunking (small/large)
 2. Parent-child relationships for auto-merging
 3. Metadata preservation across chunk levels
+4. **Sentence-aware chunking** to prevent mid-sentence splits
 
 Chunk Size Strategy:
 | Level  | Size (tokens) | Overlap | Purpose                      |
 |--------|---------------|---------|------------------------------|
-| Large  | 1024          | 20      | Full sections, broad context |
-| Small  | 256           | 20      | Individual facts, precision  |
+| Large  | 1024          | 100     | Full sections, broad context |
+| Small  | 256           | 100     | Individual facts, precision  |
 
 Why hierarchical chunking?
 - Small chunks: Capture precise facts (amounts, dates, IDs)
 - Large chunks: Full sections for comprehensive understanding
 - Auto-merging: Start with small, merge up when more context needed
 
+Why sentence-aware chunking?
+- Token-based chunking can split mid-sentence (e.g., "Gold Rolex (ref." | "116618LB)")
+- Sentence-aware ensures semantic units stay intact
+- Critical for needle queries that need precise facts
+
 Note: Two levels are sufficient for this insurance claims project.
 """
 
 import logging
-from typing import List, Tuple
+import uuid
+from typing import List, Tuple, Optional
 
 from llama_index.core import Document
-from llama_index.core.node_parser import HierarchicalNodeParser, get_leaf_nodes
-from llama_index.core.schema import TextNode, BaseNode
+from llama_index.core.node_parser import HierarchicalNodeParser, get_leaf_nodes, SentenceSplitter
+from llama_index.core.schema import TextNode, BaseNode, NodeRelationship, RelatedNodeInfo
 from llama_index.core.storage.docstore import SimpleDocumentStore
 
 from src.config import CHUNK_SIZES, CHUNK_OVERLAP
@@ -38,57 +45,212 @@ logger = logging.getLogger(__name__)
 def create_hierarchical_nodes(
     documents: List[Document],
     chunk_sizes: List[int] = None,
-    chunk_overlap: int = None
+    chunk_overlap: int = None,
+    sentence_aware: bool = True
 ) -> Tuple[List[BaseNode], List[BaseNode], SimpleDocumentStore]:
     """
     Parse documents into hierarchical nodes for auto-merging retrieval.
-    
+
     Args:
         documents: List of LlamaIndex Document objects
         chunk_sizes: List of chunk sizes [large, small] (default: [1024, 256])
-        chunk_overlap: Overlap between chunks (default: 20)
-    
+        chunk_overlap: Overlap between chunks (default: 100)
+        sentence_aware: If True, use sentence-aware chunking (default: True)
+
     Returns:
         Tuple of (all_nodes, leaf_nodes, docstore)
         - all_nodes: All nodes at all levels
         - leaf_nodes: Only the smallest chunks (for indexing)
         - docstore: Document store with all nodes (for auto-merging)
-    
+
     Why this approach?
     - Leaf nodes (small) are indexed for precise retrieval
     - Parent nodes (large) stored in docstore
     - Auto-merging retriever can "merge up" when needed
+
+    Why sentence_aware=True (default)?
+    - Prevents splitting mid-sentence (e.g., "Rolex (ref." | "116618LB)")
+    - Critical for needle queries needing precise facts
     """
     chunk_sizes = chunk_sizes or CHUNK_SIZES
     chunk_overlap = chunk_overlap or CHUNK_OVERLAP
-    
-    logger.info(f"Creating hierarchical chunks: sizes={chunk_sizes}, overlap={chunk_overlap}")
-    
+
+    if sentence_aware:
+        return _create_sentence_aware_hierarchical_nodes(documents, chunk_sizes, chunk_overlap)
+    else:
+        return _create_token_based_hierarchical_nodes(documents, chunk_sizes, chunk_overlap)
+
+
+def _create_token_based_hierarchical_nodes(
+    documents: List[Document],
+    chunk_sizes: List[int],
+    chunk_overlap: int
+) -> Tuple[List[BaseNode], List[BaseNode], SimpleDocumentStore]:
+    """Original token-based hierarchical chunking (may split mid-sentence)."""
+    logger.info(f"Creating token-based hierarchical chunks: sizes={chunk_sizes}, overlap={chunk_overlap}")
+
     # Create hierarchical node parser
     node_parser = HierarchicalNodeParser.from_defaults(
         chunk_sizes=chunk_sizes,
         chunk_overlap=chunk_overlap
     )
-    
+
     # Parse documents into hierarchical nodes
     all_nodes = node_parser.get_nodes_from_documents(documents)
     logger.info(f"Created {len(all_nodes)} total nodes")
-    
+
     # Get only leaf nodes (smallest chunks) for indexing
     leaf_nodes = get_leaf_nodes(all_nodes)
     logger.info(f"Extracted {len(leaf_nodes)} leaf nodes")
-    
+
     # Add level metadata to nodes for debugging
     _annotate_node_levels(all_nodes, chunk_sizes)
-    
+
     # Create document store with ALL nodes (needed for auto-merging)
     docstore = SimpleDocumentStore()
     docstore.add_documents(all_nodes)
     logger.info(f"Added {len(all_nodes)} nodes to docstore")
-    
+
     # Log statistics
     _log_node_statistics(all_nodes, chunk_sizes)
-    
+
+    return all_nodes, leaf_nodes, docstore
+
+
+def _create_sentence_aware_hierarchical_nodes(
+    documents: List[Document],
+    chunk_sizes: List[int],
+    chunk_overlap: int
+) -> Tuple[List[BaseNode], List[BaseNode], SimpleDocumentStore]:
+    """
+    Create hierarchical nodes using sentence-aware chunking.
+
+    This ensures parent chunks never split mid-sentence, which prevents
+    critical information from being separated across chunks.
+
+    Approach:
+    1. Use SentenceSplitter for parent (large) chunks - respects sentence boundaries
+    2. Create child (small) chunks from parents - can use token-based since
+       they're within sentence boundaries of the parent
+    3. Manually establish parent-child relationships for auto-merging
+    """
+    logger.info(f"Creating SENTENCE-AWARE hierarchical chunks: sizes={chunk_sizes}, overlap={chunk_overlap}")
+
+    large_chunk_size = chunk_sizes[0]  # e.g., 1024
+    small_chunk_size = chunk_sizes[1] if len(chunk_sizes) > 1 else 256
+
+    # Step 1: Create parent chunks using SentenceSplitter (respects sentence boundaries)
+    parent_splitter = SentenceSplitter(
+        chunk_size=large_chunk_size,
+        chunk_overlap=chunk_overlap,
+        paragraph_separator="\n\n",
+        secondary_chunking_regex="[^,.;。？！]+[,.;。？！]?",  # Fallback: split on punctuation
+    )
+
+    # Step 2: Create child chunk splitter (smaller chunks from parents)
+    child_splitter = SentenceSplitter(
+        chunk_size=small_chunk_size,
+        chunk_overlap=chunk_overlap // 2,  # Less overlap for children
+        paragraph_separator="\n",
+    )
+
+    all_nodes = []
+    leaf_nodes = []
+
+    for doc in documents:
+        # Create parent nodes from document
+        parent_nodes = parent_splitter.get_nodes_from_documents([doc])
+
+        # Track previous parent for NEXT/PREVIOUS relationships
+        prev_parent = None
+
+        for parent_node in parent_nodes:
+            # Ensure parent has unique ID
+            parent_node.id_ = str(uuid.uuid4())
+
+            # Copy document metadata to parent
+            parent_node.metadata = {**doc.metadata, **parent_node.metadata}
+            parent_node.metadata['chunk_level'] = 'large'
+            parent_node.metadata['approx_tokens'] = len(parent_node.text) // 4
+
+            # Set source relationship
+            parent_node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(
+                node_id=doc.doc_id or doc.id_,
+                metadata=doc.metadata
+            )
+
+            # Set PREVIOUS/NEXT relationships between parents
+            if prev_parent:
+                parent_node.relationships[NodeRelationship.PREVIOUS] = RelatedNodeInfo(
+                    node_id=prev_parent.id_
+                )
+                prev_parent.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(
+                    node_id=parent_node.id_
+                )
+
+            # Create child nodes from this parent
+            parent_doc = Document(text=parent_node.text, metadata=parent_node.metadata)
+            child_nodes = child_splitter.get_nodes_from_documents([parent_doc])
+
+            # Track previous child for relationships
+            prev_child = None
+            child_ids = []
+
+            for child_node in child_nodes:
+                # Ensure child has unique ID
+                child_node.id_ = str(uuid.uuid4())
+                child_ids.append(child_node.id_)
+
+                # Copy metadata and set level
+                child_node.metadata = {**parent_node.metadata}
+                child_node.metadata['chunk_level'] = 'small'
+                child_node.metadata['approx_tokens'] = len(child_node.text) // 4
+
+                # Set PARENT relationship (critical for auto-merging!)
+                child_node.relationships[NodeRelationship.PARENT] = RelatedNodeInfo(
+                    node_id=parent_node.id_
+                )
+
+                # Set SOURCE relationship
+                child_node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(
+                    node_id=doc.doc_id or doc.id_,
+                    metadata=doc.metadata
+                )
+
+                # Set PREVIOUS/NEXT relationships between siblings
+                if prev_child:
+                    child_node.relationships[NodeRelationship.PREVIOUS] = RelatedNodeInfo(
+                        node_id=prev_child.id_
+                    )
+                    prev_child.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(
+                        node_id=child_node.id_
+                    )
+
+                prev_child = child_node
+                all_nodes.append(child_node)
+                leaf_nodes.append(child_node)
+
+            # Set CHILD relationship on parent (list of child IDs)
+            if child_ids:
+                parent_node.relationships[NodeRelationship.CHILD] = [
+                    RelatedNodeInfo(node_id=cid) for cid in child_ids
+                ]
+
+            all_nodes.append(parent_node)
+            prev_parent = parent_node
+
+    logger.info(f"Created {len(all_nodes)} total nodes (sentence-aware)")
+    logger.info(f"  - Parent nodes: {len([n for n in all_nodes if n.metadata.get('chunk_level') == 'large'])}")
+    logger.info(f"  - Child nodes: {len(leaf_nodes)}")
+
+    # Create document store with ALL nodes (needed for auto-merging)
+    docstore = SimpleDocumentStore()
+    docstore.add_documents(all_nodes)
+    logger.info(f"Added {len(all_nodes)} nodes to docstore")
+
+    # Log statistics
+    _log_node_statistics(all_nodes, chunk_sizes)
+
     return all_nodes, leaf_nodes, docstore
 
 
