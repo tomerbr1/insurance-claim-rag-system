@@ -534,6 +534,130 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             max-width: 150px;
         }}
 
+        /* Expandable Query Details */
+        .result-row {{
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }}
+
+        .result-row:hover {{
+            background: var(--bg-elevated);
+        }}
+
+        .result-row.expanded {{
+            background: var(--bg-elevated);
+        }}
+
+        .expand-icon {{
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            text-align: center;
+            color: var(--text-muted);
+            transition: transform 0.2s ease;
+            margin-right: 0.5rem;
+        }}
+
+        .result-row.expanded .expand-icon {{
+            transform: rotate(90deg);
+            color: var(--code-color);
+        }}
+
+        .query-details {{
+            display: none;
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--code-color);
+        }}
+
+        .query-details.visible {{
+            display: table-row;
+        }}
+
+        .query-details-content {{
+            padding: 1.5rem;
+        }}
+
+        .detail-section {{
+            margin-bottom: 1.25rem;
+        }}
+
+        .detail-section:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .detail-label {{
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+
+        .detail-label-icon {{
+            font-size: 0.9rem;
+        }}
+
+        .detail-label.query {{ color: var(--structured-color); }}
+        .detail-label.expected {{ color: var(--success); }}
+        .detail-label.actual {{ color: var(--model-color); }}
+
+        .detail-text {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            padding: 1rem;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 200px;
+            overflow-y: auto;
+        }}
+
+        .detail-text.query-text {{
+            color: var(--text-primary);
+            border-left: 3px solid var(--structured-color);
+        }}
+
+        .detail-text.expected-text {{
+            color: var(--success);
+            border-left: 3px solid var(--success);
+        }}
+
+        .detail-text.actual-text {{
+            color: var(--text-secondary);
+            border-left: 3px solid var(--model-color);
+        }}
+
+        .detail-text.actual-text.good {{
+            color: var(--success);
+        }}
+
+        .detail-text.actual-text.bad {{
+            color: var(--danger);
+        }}
+
+        .detail-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }}
+
+        @media (max-width: 900px) {{
+            .detail-grid {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+
+        .no-response {{
+            color: var(--text-muted);
+            font-style: italic;
+        }}
+
         /* Footer */
         footer {{
             text-align: center;
@@ -734,6 +858,36 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 }}, 100 + i * 100);
             }});
         }});
+
+        // Toggle query details expansion
+        function toggleDetails(rowIndex) {{
+            const row = document.querySelector(`tr[data-row="${{rowIndex}}"]`);
+            const details = document.querySelector(`tr[data-details="${{rowIndex}}"]`);
+
+            if (row && details) {{
+                row.classList.toggle('expanded');
+                details.classList.toggle('visible');
+            }}
+        }}
+
+        // Collapse all when clicking outside
+        document.addEventListener('click', (e) => {{
+            if (!e.target.closest('.result-row') && !e.target.closest('.query-details')) {{
+                // Don't collapse if clicking inside details
+            }}
+        }});
+
+        // Keyboard navigation: Escape to collapse all
+        document.addEventListener('keydown', (e) => {{
+            if (e.key === 'Escape') {{
+                document.querySelectorAll('.result-row.expanded').forEach(row => {{
+                    row.classList.remove('expanded');
+                }});
+                document.querySelectorAll('.query-details.visible').forEach(details => {{
+                    details.classList.remove('visible');
+                }});
+            }}
+        }});
     </script>
 </body>
 </html>'''
@@ -784,9 +938,22 @@ def _generate_agent_card(agent: str, summary: Dict[str, Any]) -> str:
     '''
 
 
-def _generate_result_row(result: Dict[str, Any]) -> str:
-    """Generate HTML for a result table row."""
-    query = result.get('query', '')[:50] + ('...' if len(result.get('query', '')) > 50 else '')
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters."""
+    if not text:
+        return ""
+    return (text
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&#39;'))
+
+
+def _generate_result_row(result: Dict[str, Any], row_index: int) -> str:
+    """Generate HTML for a result table row with expandable details."""
+    full_query = result.get('query', '')
+    query = full_query[:50] + ('...' if len(full_query) > 50 else '')
     actual_agent = result.get('actual_agent', 'unknown')
 
     code_score = result.get('code_grade', {}).get('score', 0)
@@ -795,29 +962,60 @@ def _generate_result_row(result: Dict[str, Any]) -> str:
 
     passed = result.get('code_grade', {}).get('passed', False)
 
+    # Get response and ground truth for details
+    response = result.get('response', '')
+    ground_truth = result.get('ground_truth', '')
+
     # Human grade with comments
     human_grade = result.get('human_grade')
     if human_grade:
         human_level = human_grade.get('level', 0)
         human_label = human_grade.get('label', '')
         human_reasoning = human_grade.get('reasoning', '')
-        # Escape HTML in reasoning for tooltip
-        human_reasoning_escaped = human_reasoning.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+        human_reasoning_escaped = _escape_html(human_reasoning)
         human_cell = f'''<span class="human-grade" title="{human_reasoning_escaped}">{human_level}/5</span>'''
         if human_reasoning:
-            human_cell += f'''<div class="human-comment">{human_reasoning[:60]}{'...' if len(human_reasoning) > 60 else ''}</div>'''
+            human_cell += f'''<div class="human-comment">{_escape_html(human_reasoning[:60])}{'...' if len(human_reasoning) > 60 else ''}</div>'''
     else:
         human_cell = '<span class="human-grade na">—</span>'
 
+    # Determine response quality class
+    response_class = 'good' if consensus >= 0.7 else ('bad' if consensus < 0.4 else '')
+
+    # Escape content for HTML
+    query_escaped = _escape_html(full_query)
+    ground_truth_escaped = _escape_html(ground_truth) if ground_truth else '<span class="no-response">No ground truth available</span>'
+    response_escaped = _escape_html(response) if response else '<span class="no-response">No response recorded</span>'
+
     return f'''
-    <tr>
-        <td class="query-cell" title="{result.get('query', '')}">{query}</td>
+    <tr class="result-row" data-row="{row_index}" onclick="toggleDetails({row_index})">
+        <td class="query-cell"><span class="expand-icon">▶</span>{query}</td>
         <td><span class="agent-badge {actual_agent}">{actual_agent}</span></td>
         <td class="score-cell {_score_class(code_score)}">{code_score:.2f}</td>
         <td class="score-cell {_score_class(model_score)}">{model_score:.2f}</td>
         <td class="human-cell">{human_cell}</td>
         <td class="score-cell {_score_class(consensus)}">{consensus:.2f}</td>
         <td><span class="pass-badge {'pass' if passed else 'fail'}">{'PASS' if passed else 'FAIL'}</span></td>
+    </tr>
+    <tr class="query-details" data-details="{row_index}">
+        <td colspan="7">
+            <div class="query-details-content">
+                <div class="detail-section">
+                    <div class="detail-label query"><span class="detail-label-icon">❓</span> Full Query</div>
+                    <div class="detail-text query-text">{query_escaped}</div>
+                </div>
+                <div class="detail-grid">
+                    <div class="detail-section">
+                        <div class="detail-label expected"><span class="detail-label-icon">✓</span> Expected (Ground Truth)</div>
+                        <div class="detail-text expected-text">{ground_truth_escaped}</div>
+                    </div>
+                    <div class="detail-section">
+                        <div class="detail-label actual"><span class="detail-label-icon">🤖</span> Actual Response</div>
+                        <div class="detail-text actual-text {response_class}">{response_escaped}</div>
+                    </div>
+                </div>
+            </div>
+        </td>
     </tr>
     '''
 
@@ -846,8 +1044,8 @@ def generate_html_report(
 
     # Generate result rows
     result_rows = ''
-    for result in report_dict.get('results', [])[:50]:  # Limit to 50 rows
-        result_rows += _generate_result_row(result)
+    for idx, result in enumerate(report_dict.get('results', [])[:50]):  # Limit to 50 rows
+        result_rows += _generate_result_row(result, idx)
 
     # Calculate human score
     human_grades = [
