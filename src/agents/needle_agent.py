@@ -103,14 +103,22 @@ class SmartNeedleQueryEngine:
 
         # Try to use auto-merging if docstore has proper relationships
         try:
+            # Use the explicitly passed docstore, not the index's storage_context.docstore
+            # (which may be empty when loading from persistence)
+            if not self._docstore.docs:
+                raise ValueError("Docstore is empty")
+
+            # Inject our loaded docstore into the index's storage_context
+            # This preserves all other components (vector_store, index_store, etc.)
+            # while providing the docstore needed for auto-merging
+            storage_context = self._hierarchical_index.storage_context
+            storage_context.docstore = self._docstore
+
             retriever = AutoMergingRetriever(
                 base_retriever,
-                storage_context=self._hierarchical_index.storage_context,
+                storage_context=storage_context,
                 simple_ratio_thresh=self._merge_threshold
             )
-            # Test that docstore is properly configured
-            if not self._hierarchical_index.storage_context.docstore.docs:
-                raise ValueError("Docstore is empty")
         except Exception as e:
             # Fall back to basic retriever if auto-merging fails
             logger.warning(f"Auto-merging unavailable ({e}), using basic retriever")
