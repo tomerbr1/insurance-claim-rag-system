@@ -11,6 +11,7 @@ Also provides functions to:
 - Determine if indexes can be reused vs need rebuilding
 """
 
+import gc
 import logging
 import shutil
 import json
@@ -59,19 +60,20 @@ def check_existing_data() -> Dict[str, any]:
     }
     
     # Check ChromaDB
+    chroma_client = None
     if CHROMA_DIR.exists():
         try:
             chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
             collections = chroma_client.list_collections()
             collection_names = [c.name for c in collections]
-            
+
             if CHROMA_COLLECTION_NAME in collection_names:
                 collection = chroma_client.get_collection(CHROMA_COLLECTION_NAME)
                 count = collection.count()
                 result['has_chromadb'] = count > 0
                 result['chromadb_count'] = count
                 result['details']['chromadb_collection'] = CHROMA_COLLECTION_NAME
-            
+
             # Check for summary collection
             if SUMMARY_COLLECTION_NAME in collection_names:
                 summary_collection = chroma_client.get_collection(SUMMARY_COLLECTION_NAME)
@@ -79,10 +81,17 @@ def check_existing_data() -> Dict[str, any]:
                 result['summary_count'] = summary_count
                 result['has_summary_data'] = summary_count > 0
                 result['details']['summary_collection'] = SUMMARY_COLLECTION_NAME
-                
+
         except Exception as e:
             logger.warning(f"Error checking ChromaDB: {e}")
             result['details']['chromadb_error'] = str(e)
+        finally:
+            # CRITICAL: Explicitly release ChromaDB client to free SQLite locks
+            # Without this, subsequent operations (cleanup, rebuild) may fail with
+            # "attempt to write a readonly database" error
+            if chroma_client is not None:
+                del chroma_client
+                gc.collect()
     
     # Check for docstore file
     docstore_path = CHROMA_DIR / DOCSTORE_FILE
