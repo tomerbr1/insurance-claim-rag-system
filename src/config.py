@@ -35,11 +35,11 @@ GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-2.5-flash")
 
 # Chunking Configuration
 CHUNK_SIZES = [1024, 256]  # Large, Small (two levels are sufficient for this project)
-CHUNK_OVERLAP = 20
+CHUNK_OVERLAP = 100  # Increased from 20 to prevent splitting mid-word/number
 
 # Retrieval Configuration
-SIMILARITY_TOP_K = 6
-AUTO_MERGE_THRESHOLD = 0.5  # Merge if >50% of children match
+SIMILARITY_TOP_K = 12  # Increased from 6 to retrieve more chunks for auto-merging
+AUTO_MERGE_THRESHOLD = 0.3  # Lower threshold (was 0.5) to trigger more merging
 
 # ChromaDB Configuration
 CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "insurance_claims")
