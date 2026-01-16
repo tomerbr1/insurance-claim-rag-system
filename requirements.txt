@@ -36,6 +36,9 @@ aiohttp==3.9.5
 rich>=13.0.0        # Rich text formatting and tables
 questionary>=2.0.0  # Interactive prompts
 
+# HTML parsing
+beautifulsoup4>=4.12.0  # HTML parsing for report comparison
+
 # Optional: Streamlit UI (uncomment when needed)
 # streamlit==1.38.0
 

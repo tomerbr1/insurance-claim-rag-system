@@ -52,6 +52,22 @@ from src.graders.human_graders import (
     HumanGraderCLI,
 )
 
+from src.graders.report_comparison import (
+    ParsedReport,
+    QueryResult,
+    MetricDelta,
+    QueryDelta,
+    ComparisonSummary,
+    ComparisonResult,
+    parse_html_report,
+    compare_reports,
+    list_available_reports,
+    get_report_display_name,
+    select_reports_interactive,
+    print_comparison_summary,
+    generate_comparison_html,
+)
+
 __all__ = [
     # Code graders
     'CodeGradeResult',
@@ -72,4 +88,18 @@ __all__ = [
     'HumanGrade',
     'HumanGraderStore',
     'HumanGraderCLI',
+    # Report comparison
+    'ParsedReport',
+    'QueryResult',
+    'MetricDelta',
+    'QueryDelta',
+    'ComparisonSummary',
+    'ComparisonResult',
+    'parse_html_report',
+    'compare_reports',
+    'list_available_reports',
+    'get_report_display_name',
+    'select_reports_interactive',
+    'print_comparison_summary',
+    'generate_comparison_html',
 ]

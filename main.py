@@ -91,6 +91,7 @@ def main_menu():
         questionary.Choice("  Multi-Grader Eval  Run eval (code + model graders)", value="graders"),
         questionary.Choice("  Human Grading      Manually grade responses", value="human"),
         questionary.Choice("  Generate Report    Create report from saved data", value="report"),
+        questionary.Choice("  Compare Reports    Compare two evaluation runs", value="compare"),
         questionary.Choice("  Show Statistics    View system metrics", value="stats"),
         questionary.Choice("  MCP Status         Check MCP integration", value="mcp"),
         questionary.Choice("  Rebuild Index      Rebuild all indexes from scratch", value="rebuild"),
@@ -223,6 +224,16 @@ def run_generate_report():
     report = generate_report_from_saved(output_html=True)
     if report:
         console.print(f"\n[green]✓ Report generated successfully![/green]\n")
+
+
+def run_compare_reports():
+    """Interactive report comparison."""
+    from core import compare_evaluation_reports
+
+    console.print("\n[bold cyan]Compare Evaluation Reports[/bold cyan]")
+    console.print("[dim]Select two reports to compare improvements and regressions[/dim]\n")
+
+    compare_evaluation_reports()
 
 
 def show_statistics(system: dict):
@@ -374,6 +385,8 @@ def run_interactive():
                 run_human_grading()
             elif choice == "report":
                 run_generate_report()
+            elif choice == "compare":
+                run_compare_reports()
             elif choice == "stats":
                 show_statistics(system)
             elif choice == "mcp":

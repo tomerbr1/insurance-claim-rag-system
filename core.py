@@ -1008,6 +1008,74 @@ def generate_report_from_saved(output_html: bool = True):
     return report
 
 
+def compare_evaluation_reports():
+    """
+    Interactive comparison of two HTML evaluation reports.
+
+    Lists available reports, lets user select two, compares them,
+    and generates a comparison HTML report.
+    """
+    from src.graders.report_comparison import (
+        list_available_reports,
+        select_reports_interactive,
+        parse_html_report,
+        compare_reports,
+        generate_comparison_html,
+        print_comparison_summary
+    )
+
+    # List available reports
+    reports = list_available_reports()
+
+    if len(reports) < 2:
+        console.print("[yellow]Need at least 2 reports to compare.[/yellow]")
+        console.print(f"[dim]Found {len(reports)} report(s) in eval_runs/[/dim]")
+        console.print("[dim]Run Multi-Grader Eval first to generate reports.[/dim]\n")
+        return
+
+    console.print(f"[dim]Found {len(reports)} reports in eval_runs/[/dim]\n")
+
+    try:
+        # Interactive selection
+        baseline_path, comparison_path = select_reports_interactive(reports)
+
+        console.print(f"\n[dim]Parsing reports...[/dim]")
+
+        # Parse both reports
+        baseline = parse_html_report(baseline_path)
+        comparison = parse_html_report(comparison_path)
+
+        console.print(f"[dim]Baseline: {baseline.total_queries} queries[/dim]")
+        console.print(f"[dim]Comparison: {comparison.total_queries} queries[/dim]")
+
+        # Compare
+        result = compare_reports(baseline, comparison)
+
+        # Print console summary
+        print_comparison_summary(result)
+
+        # Generate HTML report
+        output_dir = Path("eval_runs_comparisons")
+        output_dir.mkdir(exist_ok=True)
+
+        output_path = output_dir / f"comparison_{datetime.now():%Y%m%d_%H%M%S}.html"
+        generate_comparison_html(result, output_path)
+
+        console.print(f"\n[green]Comparison report saved: {output_path}[/green]")
+        console.print(f"[dim]Open with: open {output_path}[/dim]\n")
+
+    except KeyboardInterrupt:
+        console.print("\n[dim]Comparison cancelled.[/dim]\n")
+    except FileNotFoundError as e:
+        console.print(f"\n[red]Error: {e}[/red]\n")
+    except ValueError as e:
+        console.print(f"\n[red]Error parsing report: {e}[/red]\n")
+    except Exception as e:
+        console.print(f"\n[red]Unexpected error: {e}[/red]")
+        import traceback
+        traceback.print_exc()
+
+
 def run_graders_evaluation(
     system: dict,
     subset: int = None,
