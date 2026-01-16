@@ -206,38 +206,38 @@ NEEDLE_QUERIES: List[Dict[str, Any]] = [
         "expected_claims": ["CLM-2024-003891"]
     },
     {
-        "query": "What was the exact deductible amount in the auto accident?",
-        "ground_truth": "Deductible amount from CLM-2024-001847",
-        "expected_claims": ["CLM-2024-001847"]
+        "query": "What was the deductible amount in the water damage claim?",
+        "ground_truth": "$1,000.00 (CLM-2024-002156)",
+        "expected_claims": ["CLM-2024-002156"]
     },
     {
         "query": "What is the policy number for the slip and fall claim?",
-        "ground_truth": "Policy number for CLM-2024-003012",
+        "ground_truth": "CGL-2234789 (Sunny Days Cafe LLC)",
         "expected_claims": ["CLM-2024-003012"]
     },
     {
         "query": "What was the name of the surgeon who performed the appendectomy?",
-        "ground_truth": "Surgeon name from CLM-2024-005234",
+        "ground_truth": "Dr. Michael Torres (at Stanford Medical Center)",
         "expected_claims": ["CLM-2024-005234"]
     },
     {
-        "query": "What was the serial number of the stolen Rolex?",
-        "ground_truth": "116618LB or serial from CLM-2024-003891",
+        "query": "What was the reference number of the stolen Rolex?",
+        "ground_truth": "ref. 116618LB (Gold Rolex Submariner)",
         "expected_claims": ["CLM-2024-003891"]
     },
     {
-        "query": "What was the exact water extraction cost in the flood claim?",
-        "ground_truth": "Water extraction cost from CLM-2024-002156",
+        "query": "What was the emergency mitigation cost in the water damage claim?",
+        "ground_truth": "$4,200.00 (ServiceMaster emergency mitigation)",
         "expected_claims": ["CLM-2024-002156"]
     },
     {
         "query": "What date was the workers comp injury reported?",
-        "ground_truth": "Injury report date from CLM-2024-004127",
+        "ground_truth": "August 5, 2024 (same day as injury occurred)",
         "expected_claims": ["CLM-2024-004127"]
     },
     {
         "query": "What was the VIN of the totaled vehicle?",
-        "ground_truth": "VIN from CLM-2024-003458",
+        "ground_truth": "2T3RFREV8KW024891 (2019 Toyota RAV4 XLE)",
         "expected_claims": ["CLM-2024-003458"]
     },
     # Additional needle queries for comprehensive coverage (8 new)
